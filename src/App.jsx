@@ -18,6 +18,15 @@ import {
   getQuickPrompts,
 } from './utils/agent.js'
 import {
+  AI_PROVIDER_PRESETS,
+  DEFAULT_AI_CONFIG,
+  applyProviderPreset,
+  canUseRealAI,
+  enrichCourseWithAI,
+  getProviderNote,
+  getTutorReplyWithAI,
+} from './utils/llm.js'
+import {
   STORAGE_KEYS,
   calculateLevel,
   clearStoredItem,
@@ -53,11 +62,16 @@ const DEFAULT_FORM = {
 function App() {
   const initialCourse = loadStoredJson(STORAGE_KEYS.course, null)
   const initialSession = loadStoredJson(STORAGE_KEYS.session, null)
+  const initialAiConfig = loadStoredJson(STORAGE_KEYS.aiConfig, DEFAULT_AI_CONFIG)
 
   const [builderForm, setBuilderForm] = useState({
     ...DEFAULT_FORM,
     ...(initialCourse?.settings || {}),
     courseTitle: initialCourse?.title || DEFAULT_FORM.courseTitle,
+  })
+  const [aiConfig, setAiConfig] = useState({
+    ...DEFAULT_AI_CONFIG,
+    ...initialAiConfig,
   })
   const [course, setCourse] = useState(initialCourse)
   const [session, setSession] = useState(initialSession?.courseId === initialCourse?.id ? initialSession : null)
@@ -65,6 +79,7 @@ function App() {
   const [learnerName, setLearnerName] = useState(initialSession?.learnerName || '')
   const [chatInput, setChatInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [chatLoading, setChatLoading] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
 
@@ -84,6 +99,14 @@ function App() {
     }
   }, [session, course])
 
+  useEffect(() => {
+    saveStoredJson(STORAGE_KEYS.aiConfig, aiConfig)
+  }, [aiConfig])
+
+  const aiReady = canUseRealAI(aiConfig)
+  const aiGenerationEnabled = aiReady && aiConfig.useForCourseGeneration
+  const aiChatEnabled = aiReady && aiConfig.useForTutorChat
+
   const currentModule = useMemo(() => {
     if (!course) return null
     if (!session) return course.modules[0] || null
@@ -94,11 +117,26 @@ function App() {
   const currentReflection = currentModule && session ? session.reflections[currentModule.id] || '' : ''
   const allModulesCleared = course && session ? session.clearedModules.length === course.modules.length : false
   const progressPercent = course && session ? Math.round((session.clearedModules.length / course.modules.length) * 100) : 0
-  const readyToClearCurrent = Boolean(currentAnswer && currentReflection.trim() && currentModule && session && !session.clearedModules.includes(currentModule.id))
+  const readyToClearCurrent = Boolean(
+    currentAnswer &&
+    currentReflection.trim() &&
+    currentModule &&
+    session &&
+    !session.clearedModules.includes(currentModule.id),
+  )
   const quickPrompts = currentModule ? getQuickPrompts(currentModule) : []
+  const generationLabel = course?.runtime?.generator === 'llm' ? '真实大模型优化' : '本地生成'
 
   function updateForm(name, value) {
     setBuilderForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  function updateAiConfig(name, value) {
+    setAiConfig((prev) => ({ ...prev, [name]: value }))
+  }
+
+  function handleProviderChange(provider) {
+    setAiConfig((prev) => applyProviderPreset(provider, prev))
   }
 
   async function handleGenerateCourse() {
@@ -122,19 +160,44 @@ function App() {
         throw new Error('已读取文件，但没有提取到有效文本。请尝试上传可复制文字的 PDF、PPTX、DOCX 或 TXT。')
       }
 
-      const nextCourse = buildCourseFromText(
-        combinedText,
-        builderForm,
-        extracted.map((item) => item.meta),
-        extracted.flatMap((item) => item.warnings),
-      )
+      let nextCourse = {
+        ...buildCourseFromText(
+          combinedText,
+          builderForm,
+          extracted.map((item) => item.meta),
+          extracted.flatMap((item) => item.warnings),
+        ),
+        runtime: { generator: 'local' },
+      }
+
+      let courseNotice = '课件已成功转化为可互动的游戏化自学地图。接下来只需输入学习者昵称，开始闯关。'
+
+      if (aiGenerationEnabled) {
+        try {
+          nextCourse = await enrichCourseWithAI({
+            aiConfig,
+            sourceText: combinedText,
+            baseCourse: nextCourse,
+            options: builderForm,
+          })
+          courseNotice = '课件已生成，并已由真实大模型优化关卡、任务与智能体提示。'
+        } catch (aiError) {
+          nextCourse = {
+            ...nextCourse,
+            runtime: {
+              generator: 'local',
+              fallbackReason: aiError.message,
+            },
+          }
+          courseNotice = `课件已生成，但真实大模型优化失败，已自动回退本地版本。原因：${aiError.message}`
+        }
+      }
 
       setCourse(nextCourse)
       setSession(null)
       setLearnerName('')
       setChatInput('')
-      setError('')
-      setNotice('课件已成功转化为可互动的游戏化自学地图。接下来只需输入学习者昵称，开始闯关。')
+      setNotice(courseNotice)
     } catch (buildError) {
       setError(buildError.message || '生成失败，请重试。')
     } finally {
@@ -143,19 +206,22 @@ function App() {
   }
 
   function handleLoadDemo() {
-    const demoCourse = buildCourseFromText(
-      DEMO_TEXT,
-      builderForm,
-      [{ name: '游戏化自学示例课件.txt', extension: 'txt', size: DEMO_TEXT.length, type: 'text/plain' }],
-      [],
-    )
+    const demoCourse = {
+      ...buildCourseFromText(
+        DEMO_TEXT,
+        builderForm,
+        [{ name: '游戏化自学示例课件.txt', extension: 'txt', size: DEMO_TEXT.length, type: 'text/plain' }],
+        [],
+      ),
+      runtime: { generator: 'local' },
+    }
 
     setCourse(demoCourse)
     setSession(null)
     setLearnerName('')
     setChatInput('')
     setError('')
-    setNotice('已载入示例课件。你可以直接开始体验“上传课件—智能体陪学—闯关自学”的完整流程。')
+    setNotice('已载入示例课件。你可以直接体验“上传课件—AI 生成关卡—学生闯关—智能体陪学”的完整流程。')
   }
 
   function handleResetAll() {
@@ -170,6 +236,12 @@ function App() {
     clearStoredItem(STORAGE_KEYS.session)
   }
 
+  function handleClearAiConfig() {
+    setAiConfig(DEFAULT_AI_CONFIG)
+    clearStoredItem(STORAGE_KEYS.aiConfig)
+    setNotice('已清空当前浏览器中的 AI 配置。')
+  }
+
   function handleStartJourney() {
     if (!course) {
       setError('请先上传并生成课程。')
@@ -180,6 +252,12 @@ function App() {
     const nextSession = createStudySession(course, name)
     nextSession.chatHistory = [
       ...createOpeningMessages(course, name),
+      createChatMessage(
+        'agent',
+        aiChatEnabled
+          ? `当前已接入真实大模型 ${aiConfig.model}。你可以更自由地提问，我会结合当前课件内容即时回应。`
+          : '当前为内置陪练模式。若配置真实大模型接口，我会变得更灵活、更像真实学习伙伴。',
+      ),
       createModuleArrivalMessage(course.modules[0]),
     ]
 
@@ -286,7 +364,7 @@ function App() {
   }
 
   function handleCompleteModule(module) {
-    if (!session || !course || !currentModule) {
+    if (!session || !course) {
       return
     }
 
@@ -361,40 +439,81 @@ function App() {
     setNotice(firstSubmit ? '终局任务已提交，恭喜完成整段自学旅程。' : '终局任务方案已更新。')
   }
 
-  function handleSendChat(presetMessage) {
+  async function handleSendChat(presetMessage) {
     if (!course || !session || !currentModule) {
       setError('请先开始自学旅程，再与智能体互动。')
       return
     }
 
     const message = (presetMessage || chatInput).trim()
-    if (!message) {
+    if (!message || chatLoading) {
       return
     }
 
-    const reply = generateAgentReply({
-      course,
-      module: currentModule,
-      session,
-      message,
-    })
+    const userMessage = createChatMessage('user', message)
+    const sessionSnapshot = {
+      ...session,
+      chatHistory: [...session.chatHistory, userMessage],
+    }
 
     setSession((prev) => ({
       ...prev,
-      chatHistory: [...prev.chatHistory, createChatMessage('user', message), reply],
+      chatHistory: [...prev.chatHistory, userMessage],
     }))
     setChatInput('')
+    setChatLoading(true)
     setError('')
+
+    let replyMessage
+    let fallbackNotice = ''
+
+    try {
+      if (aiChatEnabled) {
+        const content = await getTutorReplyWithAI({
+          aiConfig,
+          course,
+          module: currentModule,
+          session: sessionSnapshot,
+          message,
+        })
+        replyMessage = createChatMessage('agent', content)
+      } else {
+        replyMessage = generateAgentReply({
+          course,
+          module: currentModule,
+          session: sessionSnapshot,
+          message,
+        })
+      }
+    } catch (chatError) {
+      replyMessage = generateAgentReply({
+        course,
+        module: currentModule,
+        session: sessionSnapshot,
+        message,
+      })
+      fallbackNotice = `真实大模型对话失败，已自动切回本地陪练。原因：${chatError.message}`
+    }
+
+    setSession((prev) => ({
+      ...prev,
+      chatHistory: [...prev.chatHistory, replyMessage],
+    }))
+    setChatLoading(false)
+
+    if (fallbackNotice) {
+      setNotice(fallbackNotice)
+    }
   }
 
   return (
     <div className="app-shell">
       <header className="hero-banner">
         <div>
-          <span className="hero-banner__eyebrow">AI 自学工具原型</span>
-          <h1>智助学：上传课件后，让智能体把它变成闯关式自主学习</h1>
+          <span className="hero-banner__eyebrow">AI 自学工具 · 真实大模型版</span>
+          <h1>智助学：上传课件后，让智能体把它变成真正可互动的闯关式自主学习</h1>
           <p className="hero-banner__lead">
-            这个版本不再做分组、测量或实验入口，而是专注做一个学生可直接使用的自学工具：上传 PPT、PDF 或讲义后，系统自动拆成关卡，学生可与智能体边学边问边闯关。
+            现在这个版本已经支持接入真实大模型。教师上传 PPT、PDF 或讲义后，系统可先自动生成游戏化关卡；学生进入后，再由真实 AI 围绕当前课件内容进行解释、举例、提示、追问与陪练。
           </p>
         </div>
         <div className="hero-banner__actions">
@@ -415,8 +534,8 @@ function App() {
           <div className="card card--sticky">
             <div className="card__header">
               <div>
-                <h2>一、上传课件并生成自学地图</h2>
-                <p>教师只需要上传课件，系统会自动重组为关卡、任务、测验和智能体陪练内容。</p>
+                <h2>一、上传课件并配置 AI</h2>
+                <p>先上传课件，再决定是否启用真实大模型来优化关卡生成与学生陪练。</p>
               </div>
             </div>
 
@@ -478,6 +597,75 @@ function App() {
               </Field>
             </div>
 
+            <section className="config-panel">
+              <div className="config-panel__head">
+                <div>
+                  <h3>真实大模型设置</h3>
+                  <p>支持 OpenAI 兼容接口。API Key 只保存在当前浏览器本地，不会提交到仓库。</p>
+                </div>
+                <span className={`status-pill ${aiReady ? 'status-pill--success' : 'status-pill--muted'}`}>
+                  {aiReady ? '已可调用真实 AI' : '当前未就绪'}
+                </span>
+              </div>
+
+              <label className="toggle-field">
+                <input
+                  type="checkbox"
+                  checked={aiConfig.enabled}
+                  onChange={(e) => updateAiConfig('enabled', e.target.checked)}
+                />
+                <span>启用真实大模型</span>
+              </label>
+
+              <div className="form-grid">
+                <Field label="提供方">
+                  <select value={aiConfig.provider} onChange={(e) => handleProviderChange(e.target.value)}>
+                    {Object.entries(AI_PROVIDER_PRESETS).map(([key, preset]) => (
+                      <option key={key} value={key}>{preset.label}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="模型名称">
+                  <input value={aiConfig.model} onChange={(e) => updateAiConfig('model', e.target.value)} placeholder="例如：deepseek-chat" />
+                </Field>
+                <Field label="Base URL">
+                  <input value={aiConfig.baseUrl} onChange={(e) => updateAiConfig('baseUrl', e.target.value)} placeholder="https://api.example.com/v1" />
+                </Field>
+                <Field label="API Key">
+                  <input type="password" value={aiConfig.apiKey} onChange={(e) => updateAiConfig('apiKey', e.target.value)} placeholder="sk-..." />
+                </Field>
+              </div>
+
+              <div className="toggle-grid">
+                <label className="toggle-field">
+                  <input
+                    type="checkbox"
+                    checked={aiConfig.useForCourseGeneration}
+                    onChange={(e) => updateAiConfig('useForCourseGeneration', e.target.checked)}
+                  />
+                  <span>用真实 AI 优化关卡生成</span>
+                </label>
+                <label className="toggle-field">
+                  <input
+                    type="checkbox"
+                    checked={aiConfig.useForTutorChat}
+                    onChange={(e) => updateAiConfig('useForTutorChat', e.target.checked)}
+                  />
+                  <span>用真实 AI 接管学生对话陪练</span>
+                </label>
+              </div>
+
+              <div className="note-card">
+                <strong>当前说明</strong>
+                <p>{getProviderNote(aiConfig.provider)}</p>
+                <p className="muted">如果浏览器端直连被目标接口拦截，可把 Base URL 改成你自己的中转服务或学校代理网关。</p>
+              </div>
+
+              <div className="button-row">
+                <button className="button button--ghost" onClick={handleClearAiConfig}>清空 AI 配置</button>
+              </div>
+            </section>
+
             <button className="button" onClick={handleGenerateCourse} disabled={loading}>
               {loading ? '正在解析并生成……' : '生成自学工具'}
             </button>
@@ -489,7 +677,7 @@ function App() {
             <div className="card__header">
               <div>
                 <h2>二、自动生成结果</h2>
-                <p>这里展示上传课件后自动形成的课程地图、社工逻辑与 AI 陪学能力。</p>
+                <p>这里展示上传课件后自动形成的课程地图、社工逻辑、游戏化结构以及真实 AI 接入状态。</p>
               </div>
             </div>
 
@@ -511,8 +699,8 @@ function App() {
                 <div className="stat-grid">
                   <StatCard label="关卡数" value={course.modules.length} description="自动从课件中拆解出的学习单元" />
                   <StatCard label="预计时长" value={`${course.estimatedMinutes} 分钟`} description="按文本长度估算的自学时长" />
-                  <StatCard label="关键词" value={course.keywords.length} description="智能体用于问答与提示的概念抓手" />
-                  <StatCard label="智能体" value={course.agentProfile.name} description="学生可边学边问的陪练伙伴" />
+                  <StatCard label="生成方式" value={generationLabel} description="可本地生成，也可由真实大模型优化" />
+                  <StatCard label="陪练模式" value={aiChatEnabled ? '真实大模型' : '本地陪练'} description="学生对话时优先使用当前配置" />
                 </div>
 
                 <div className="info-grid">
@@ -554,6 +742,11 @@ function App() {
                       {course.warnings.map((item) => <p key={item}>提示：{item}</p>)}
                     </div>
                   )}
+                  {course.runtime?.fallbackReason && (
+                    <div className="warning-list">
+                      <p>大模型优化回退原因：{course.runtime.fallbackReason}</p>
+                    </div>
+                  )}
                 </InfoBlock>
               </>
             )}
@@ -578,7 +771,7 @@ function App() {
                   <span className="eyebrow">开始自学</span>
                   <h3>输入学习者昵称，进入 AI 陪练闯关模式</h3>
                   <p>
-                    开始后，学生会获得一条线性关卡地图。每一关都包含：阅读抓手、统一挑战题、情境迁移任务，以及可随时提问的智能体。
+                    开始后，学生会获得一条线性关卡地图。每一关都包含：阅读抓手、挑战题、应用迁移任务，以及可随时提问的智能体。
                   </p>
                 </div>
                 <div className="start-panel__form">
@@ -688,12 +881,7 @@ function App() {
                       </InfoBlock>
                     </div>
 
-                    <QuizPanel
-                      key={currentModule.id}
-                      module={currentModule}
-                      answer={currentAnswer}
-                      onSubmit={handleQuizSubmit}
-                    />
+                    <QuizPanel key={currentModule.id} module={currentModule} answer={currentAnswer} onSubmit={handleQuizSubmit} />
 
                     <ReflectionComposer
                       key={currentModule.id}
@@ -734,8 +922,11 @@ function App() {
             <div className="card__header">
               <div>
                 <h2>四、智能体陪练</h2>
-                <p>学生可以随时提问，让智能体解释、举例、提示、出题与复盘。</p>
+                <p>学生可以随时提问，让智能体解释、举例、提示、出题、总结与追问。</p>
               </div>
+              <span className={`status-pill ${aiChatEnabled ? 'status-pill--success' : 'status-pill--muted'}`}>
+                {aiChatEnabled ? `真实 AI：${aiConfig.model}` : '本地陪练'}
+              </span>
             </div>
 
             {!course ? (
@@ -755,7 +946,7 @@ function App() {
 
                 <div className="quick-actions">
                   {quickPrompts.map((prompt) => (
-                    <button key={prompt} className="quick-action" onClick={() => handleSendChat(prompt)}>{prompt}</button>
+                    <button key={prompt} className="quick-action" disabled={chatLoading} onClick={() => handleSendChat(prompt)}>{prompt}</button>
                   ))}
                 </div>
 
@@ -766,6 +957,12 @@ function App() {
                       <p>{item.content}</p>
                     </article>
                   ))}
+                  {chatLoading && (
+                    <article className="chat-bubble chat-bubble--agent">
+                      <span className="chat-bubble__role">{course.agentProfile.name}</span>
+                      <p>正在思考中……</p>
+                    </article>
+                  )}
                 </div>
 
                 <div className="chat-composer">
@@ -776,8 +973,8 @@ function App() {
                     placeholder="例如：解释一下这一关 / 给我举个例子 / 我的理解是……"
                   />
                   <div className="button-row button-row--spread">
-                    <p className="muted">提示：如果你输入“我的理解是……”，智能体会给你反馈。</p>
-                    <button className="button button--secondary" onClick={() => handleSendChat()}>发送</button>
+                    <p className="muted">提示：如果你输入“我的理解是……”，智能体会对你的理解进行反馈。</p>
+                    <button className="button button--secondary" onClick={() => handleSendChat()} disabled={chatLoading}>发送</button>
                   </div>
                 </div>
               </>

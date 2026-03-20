@@ -1,6 +1,7 @@
 export const STORAGE_KEYS = {
   course: 'zhizhuxue-self-study-course',
   session: 'zhizhuxue-self-study-session',
+  aiConfig: 'zhizhuxue-self-study-ai-config',
 }
 
 export function loadStoredJson(key, fallback) {
