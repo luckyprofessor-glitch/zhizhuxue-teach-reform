@@ -42,6 +42,13 @@ import {
   saveStoredJson,
   upsertJourneyHistory,
 } from './utils/study.js'
+import {
+  buildShareUrl,
+  clearShareParamFromLocation,
+  copyText,
+  estimateShareUrlLength,
+  loadSharedCourseFromLocation,
+} from './utils/share.js'
 
 const DEMO_TEXT = `
 游戏化学习与社会工作课程融合示例
@@ -70,7 +77,16 @@ const DEFAULT_FORM = {
 }
 
 function App() {
-  const initialCourse = loadStoredJson(STORAGE_KEYS.course, null)
+  const sharedImport = useMemo(() => {
+    try {
+      return { course: loadSharedCourseFromLocation(), error: '' }
+    } catch (shareError) {
+      return { course: null, error: shareError.message || '分享链接解析失败。' }
+    }
+  }, [])
+
+  const sharedCourseFromUrl = sharedImport.course
+  const initialCourse = sharedCourseFromUrl || loadStoredJson(STORAGE_KEYS.course, null)
   const initialSession = loadStoredJson(STORAGE_KEYS.session, null)
   const initialAiConfig = loadStoredJson(STORAGE_KEYS.aiConfig, DEFAULT_AI_CONFIG)
   const initialHistory = loadStoredJson(STORAGE_KEYS.history, [])
@@ -85,6 +101,7 @@ function App() {
     ...initialAiConfig,
   })
   const [course, setCourse] = useState(initialCourse)
+  const [isSharedCourse, setIsSharedCourse] = useState(Boolean(sharedCourseFromUrl))
   const [session, setSession] = useState(initialSession?.courseId === initialCourse?.id ? initialSession : null)
   const [history, setHistory] = useState(initialHistory)
   const [uploadedFiles, setUploadedFiles] = useState([])
@@ -95,8 +112,8 @@ function App() {
   const [chatInput, setChatInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [chatLoading, setChatLoading] = useState(false)
-  const [notice, setNotice] = useState('')
-  const [error, setError] = useState('')
+  const [notice, setNotice] = useState(sharedCourseFromUrl ? '已从分享链接自动载入课程。任何打开该网址的人都可以直接进入学习。' : '')
+  const [error, setError] = useState(sharedImport.error || '')
 
   useEffect(() => {
     if (course) {
@@ -157,6 +174,8 @@ function App() {
   const generationLabel = course?.runtime?.generator === 'llm' ? '真实大模型优化' : '本地生成'
   const recentHistory = history.slice(0, 6)
   const coverKeywords = course?.keywords?.slice(0, 3) || []
+  const shareUrl = course ? buildShareUrl(course) : ''
+  const shareUrlLength = course ? estimateShareUrlLength(course) : 0
 
   function updateForm(name, value) {
     setBuilderForm((prev) => ({ ...prev, [name]: value }))
@@ -168,6 +187,27 @@ function App() {
 
   function handleProviderChange(provider) {
     setAiConfig((prev) => applyProviderPreset(provider, prev))
+  }
+
+  async function handleCopyShareUrl() {
+    if (!course) {
+      setError('请先生成课程，再复制学习链接。')
+      return
+    }
+
+    try {
+      await copyText(shareUrl)
+      setNotice('公开学习链接已复制。把这个网址发给别人，对方打开即可直接学习。')
+      setError('')
+    } catch (copyError) {
+      setError(copyError.message || '复制链接失败，请手动复制浏览器地址。')
+    }
+  }
+
+  function handleExitSharedView() {
+    clearShareParamFromLocation()
+    setIsSharedCourse(false)
+    setNotice('已移除地址中的分享课程参数。当前页面将回到本地模式。')
   }
 
   function handleExportCoursePackage() {
@@ -200,7 +240,9 @@ function App() {
         throw new Error('课程包格式无效，未找到可读取的课程结构。')
       }
 
+      clearShareParamFromLocation()
       setCourse(nextCourse)
+      setIsSharedCourse(false)
       setSession(null)
       setLearnerName('')
       setLearnerClass('')
@@ -276,7 +318,9 @@ function App() {
         }
       }
 
+      clearShareParamFromLocation()
       setCourse(nextCourse)
+      setIsSharedCourse(false)
       setSession(null)
       setLearnerName('')
       setLearnerClass('')
@@ -303,7 +347,9 @@ function App() {
       runtime: { generator: 'local' },
     }
 
+    clearShareParamFromLocation()
     setCourse(demoCourse)
+    setIsSharedCourse(false)
     setSession(null)
     setLearnerName('')
     setLearnerClass('')
@@ -315,7 +361,9 @@ function App() {
   }
 
   function handleResetAll() {
+    clearShareParamFromLocation()
     setCourse(null)
+    setIsSharedCourse(false)
     setSession(null)
     setHistory([])
     setUploadedFiles([])
@@ -908,6 +956,7 @@ function App() {
                       <p>教师：{course.classroom?.teacherName || '未填写'} ｜ 入口码：{course.classroom?.entryCode || '未设置，学生可直接进入'}</p>
                     </div>
                     <div className="button-row">
+                      <button className="button button--secondary" onClick={handleCopyShareUrl}>复制学习链接</button>
                       <button className="button button--secondary" onClick={handleExportCoursePackage}>导出课程包</button>
                       <label className="button button--ghost button--file">
                         导入课程包
@@ -915,7 +964,17 @@ function App() {
                       </label>
                     </div>
                   </div>
-                  <p className="muted">如果你要把课程发给学生或同事，可以导出课程包 JSON，再在另一台设备上导入。静态网页环境下，这是最稳妥的分享方式。</p>
+                  <div className="share-url-box">
+                    <span>公开学习链接</span>
+                    <code>{shareUrl || '请先生成课程'}</code>
+                    <p className="muted">任何人打开这个网址，都能直接进入学习。当前链接长度约 {shareUrlLength} 个字符；课件越大，链接会越长。</p>
+                    {isSharedCourse && (
+                      <div className="button-row">
+                        <button className="button button--ghost" onClick={handleExitSharedView}>移除当前分享参数</button>
+                      </div>
+                    )}
+                  </div>
+                  <p className="muted">如果你要把课程发给学生或同事，优先发“公开学习链接”；如果链接过长，也可以改用课程包 JSON 导出／导入。</p>
                 </InfoBlock>
 
                 <InfoBlock title="课件来源">
