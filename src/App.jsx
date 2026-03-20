@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { extractTextFromFile } from './utils/courseware.js'
 import {
@@ -67,9 +67,6 @@ const DEMO_TEXT = `
 const DEFAULT_FORM = {
   courseTitle: '智助学｜AI游戏化课件自学工具',
   targetLearners: '本科生',
-  className: '社会工作导论',
-  teacherName: '',
-  entryCode: '',
   socialLens: '优势视角',
   gameStyle: '闯关式',
   moduleCount: 5,
@@ -105,10 +102,6 @@ function App() {
   const [session, setSession] = useState(initialSession?.courseId === initialCourse?.id ? initialSession : null)
   const [history, setHistory] = useState(initialHistory)
   const [uploadedFiles, setUploadedFiles] = useState([])
-  const [learnerName, setLearnerName] = useState(initialSession?.learnerName || '')
-  const [learnerClass, setLearnerClass] = useState(initialSession?.learnerClass || '')
-  const [learningGoal, setLearningGoal] = useState(initialSession?.learningGoal || '')
-  const [entryCodeInput, setEntryCodeInput] = useState('')
   const [chatInput, setChatInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [chatLoading, setChatLoading] = useState(false)
@@ -145,6 +138,12 @@ function App() {
     }
   }, [course, session])
 
+  useEffect(() => {
+    if (course && !session) {
+      setSession(buildAutoSession(course))
+    }
+  }, [course, session, buildAutoSession])
+
   const aiReady = canUseRealAI(aiConfig)
   const aiGenerationEnabled = aiReady && aiConfig.useForCourseGeneration
   const aiChatEnabled = aiReady && aiConfig.useForTutorChat
@@ -172,7 +171,6 @@ function App() {
   const quickPrompts = currentModule ? getQuickPrompts(currentModule, currentCoachMode) : []
   const teacherActionPrompts = currentModule ? getTeacherActionPrompts(currentModule, learningDiagnosis) : []
   const generationLabel = course?.runtime?.generator === 'llm' ? '真实大模型优化' : '本地生成'
-  const recentHistory = history.slice(0, 6)
   const coverKeywords = course?.keywords?.slice(0, 3) || []
   const shareUrl = course ? buildShareUrl(course) : ''
   const shareUrlLength = course ? estimateShareUrlLength(course) : 0
@@ -188,6 +186,25 @@ function App() {
   function handleProviderChange(provider) {
     setAiConfig((prev) => applyProviderPreset(provider, prev))
   }
+
+  const buildAutoSession = useCallback((targetCourse) => {
+    const nextSession = createStudySession(targetCourse, {
+      learnerName: '学习者',
+      learnerClass: '',
+      learningGoal: '',
+    })
+    nextSession.chatHistory = [
+      ...createOpeningMessages(targetCourse, '学习者'),
+      createChatMessage(
+        'agent',
+        aiChatEnabled
+          ? `当前已接入真实大模型 ${aiConfig.model}。你可以更自由地提问，我会结合当前课件内容即时回应。`
+          : '当前为内置陪练模式。你现在可以直接开始看内容、做题，并随时向我提问。',
+      ),
+      createModuleArrivalMessage(targetCourse.modules[0]),
+    ]
+    return nextSession
+  }, [aiChatEnabled, aiConfig.model])
 
   async function handleCopyShareUrl() {
     if (!course) {
@@ -244,10 +261,6 @@ function App() {
       setCourse(nextCourse)
       setIsSharedCourse(false)
       setSession(null)
-      setLearnerName('')
-      setLearnerClass('')
-      setLearningGoal('')
-      setEntryCodeInput('')
       setChatInput('')
       setBuilderForm((prev) => ({
         ...prev,
@@ -322,10 +335,6 @@ function App() {
       setCourse(nextCourse)
       setIsSharedCourse(false)
       setSession(null)
-      setLearnerName('')
-      setLearnerClass('')
-      setLearningGoal('')
-      setEntryCodeInput('')
       setChatInput('')
       setNotice(courseNotice)
     } catch (buildError) {
@@ -351,10 +360,6 @@ function App() {
     setCourse(demoCourse)
     setIsSharedCourse(false)
     setSession(null)
-    setLearnerName('')
-    setLearnerClass('')
-    setLearningGoal('')
-    setEntryCodeInput('')
     setChatInput('')
     setError('')
     setNotice('已载入示例课件。你可以直接体验“上传课件—AI 生成关卡—学生闯关—智能体陪学”的完整流程。')
@@ -367,10 +372,6 @@ function App() {
     setSession(null)
     setHistory([])
     setUploadedFiles([])
-    setLearnerName('')
-    setLearnerClass('')
-    setLearningGoal('')
-    setEntryCodeInput('')
     setChatInput('')
     setError('')
     setNotice('已清空当前课件、学习旅程与本地缓存。')
@@ -385,62 +386,15 @@ function App() {
     setNotice('已清空当前浏览器中的 AI 配置。')
   }
 
-  function handleStartJourney() {
-    if (!course) {
-      setError('请先上传并生成课程。')
-      return
-    }
-
-    const expectedCode = course.classroom?.entryCode?.trim()
-    if (expectedCode && entryCodeInput.trim() !== expectedCode) {
-      setError('课程入口码不正确，请核对后再进入。')
-      return
-    }
-
-    const name = learnerName.trim() || '同学'
-    const nextSession = createStudySession(course, {
-      learnerName: name,
-      learnerClass: learnerClass.trim(),
-      learningGoal: learningGoal.trim(),
-    })
-    nextSession.chatHistory = [
-      ...createOpeningMessages(course, name),
-      createChatMessage(
-        'agent',
-        aiChatEnabled
-          ? `当前已接入真实大模型 ${aiConfig.model}。你可以更自由地提问，我会结合当前课件内容即时回应。`
-          : '当前为内置陪练模式。若配置真实大模型接口，我会变得更灵活、更像真实学习伙伴。',
-      ),
-      createModuleArrivalMessage(course.modules[0]),
-    ]
-
-    setSession(nextSession)
-    setLearnerName(name)
-    setLearnerClass(learnerClass.trim())
-    setLearningGoal(learningGoal.trim())
-    setError('')
-    setNotice(`${name} 的自学旅程已开始。现在可以一边闯关，一边和智能体对话。`)
-  }
-
   function handleRestartJourney() {
-    clearStoredItem(STORAGE_KEYS.session)
-    setSession(null)
-    setChatInput('')
-    setNotice('已重置当前学习旅程。你可以重新开始闯关。')
-  }
-
-  function handleRestoreJourney(record) {
-    if (!course || record.courseId !== course.id || !record.sessionSnapshot) {
-      setError('当前课程与该学习档案不匹配，无法直接恢复。')
+    if (!course) {
       return
     }
 
-    setSession(record.sessionSnapshot)
-    setLearnerName(record.sessionSnapshot.learnerName || '')
-    setLearnerClass(record.sessionSnapshot.learnerClass || '')
-    setLearningGoal(record.sessionSnapshot.learningGoal || '')
-    setNotice(`已恢复 ${record.learnerName} 的最近学习档案。`)
-    setError('')
+    clearStoredItem(STORAGE_KEYS.session)
+    setSession(buildAutoSession(course))
+    setChatInput('')
+    setNotice('已重新开始当前自学旅程。')
   }
 
   function handleCoachModeChange(modeId) {
@@ -755,15 +709,6 @@ function App() {
               <Field label="适用对象">
                 <input value={builderForm.targetLearners} onChange={(e) => updateForm('targetLearners', e.target.value)} />
               </Field>
-              <Field label="课程／班级名称">
-                <input value={builderForm.className} onChange={(e) => updateForm('className', e.target.value)} placeholder="例如：社会工作导论 / 2026社工1班" />
-              </Field>
-              <Field label="教师姓名（选填）">
-                <input value={builderForm.teacherName} onChange={(e) => updateForm('teacherName', e.target.value)} placeholder="例如：张老师" />
-              </Field>
-              <Field label="课程入口码（选填）">
-                <input value={builderForm.entryCode} onChange={(e) => updateForm('entryCode', e.target.value)} placeholder="例如：SW2026" />
-              </Field>
               <Field label="社工理论透镜">
                 <select value={builderForm.socialLens} onChange={(e) => updateForm('socialLens', e.target.value)}>
                   {Object.keys(SOCIAL_WORK_LENSES).map((key) => (
@@ -952,8 +897,8 @@ function App() {
                 <InfoBlock title="课程分享与入口">
                   <div className="share-card">
                     <div>
-                      <strong>{course.classroom?.className || builderForm.className || '未命名课程入口'}</strong>
-                      <p>教师：{course.classroom?.teacherName || '未填写'} ｜ 入口码：{course.classroom?.entryCode || '未设置，学生可直接进入'}</p>
+                      <strong>{course.title}</strong>
+                      <p>任何人只要拿到下面这个网址，就可以直接打开课程并开始学习。</p>
                     </div>
                     <div className="button-row">
                       <button className="button button--secondary" onClick={handleCopyShareUrl}>复制学习链接</button>
@@ -1013,76 +958,9 @@ function App() {
             </div>
 
             {!course ? (
-              <EmptyState title="请先生成课程" description="生成课程后，这里会变成学生实际使用的自学界面。" />
+              <EmptyState title="请先生成课程" description="生成课程后，这里会立即变成学生可直接使用的自学界面。" />
             ) : !session ? (
-              <div className="start-panel">
-                <div className="start-panel__intro">
-                  <span className="eyebrow">开始自学</span>
-                  <h3>输入学习者昵称，进入 AI 陪练闯关模式</h3>
-                  <p>
-                    开始后，学生会获得一条线性关卡地图。每一关都包含：阅读抓手、挑战题、应用迁移任务，以及可随时提问的智能体。
-                  </p>
-                </div>
-                <div className="start-panel__form">
-                  <Field label="学习者昵称">
-                    <input
-                      value={learnerName}
-                      onChange={(e) => setLearnerName(e.target.value)}
-                      placeholder="例如：小林 / 学习者A"
-                    />
-                  </Field>
-                  <Field label="班级／课程入口（选填）">
-                    <input
-                      value={learnerClass}
-                      onChange={(e) => setLearnerClass(e.target.value)}
-                      placeholder="例如：2026社工1班 / 社会工作导论"
-                    />
-                  </Field>
-                  <Field label="本次学习目标（选填）">
-                    <input
-                      value={learningGoal}
-                      onChange={(e) => setLearningGoal(e.target.value)}
-                      placeholder="例如：想搞懂优势视角怎么落地"
-                    />
-                  </Field>
-                  {course.classroom?.entryCode && (
-                    <Field label="课程入口码">
-                      <input
-                        value={entryCodeInput}
-                        onChange={(e) => setEntryCodeInput(e.target.value)}
-                        placeholder="请输入教师提供的入口码"
-                      />
-                    </Field>
-                  )}
-                  <button className="button" onClick={handleStartJourney}>开始闯关</button>
-                </div>
-
-                {recentHistory.length > 0 && (
-                  <section className="archive-panel">
-                    <div className="archive-panel__head">
-                      <div>
-                        <h3>最近学习档案</h3>
-                        <p>当前浏览器会保留最近的自学记录，方便展示产品化形态。</p>
-                      </div>
-                    </div>
-                    <div className="archive-list">
-                      {recentHistory.map((item) => (
-                        <article className="archive-item" key={item.id}>
-                          <div className="archive-item__avatar">{item.avatarText}</div>
-                          <div className="archive-item__content">
-                            <strong>{item.learnerName} · {item.courseTitle}</strong>
-                            <p>{item.learnerClass || '未填写班级'}{item.learningGoal ? `｜目标：${item.learningGoal}` : ''}</p>
-                            <p>进度 {item.progressPercent}% ｜ Lv.{item.level} ｜ 徽章 {item.badges.length}</p>
-                          </div>
-                          {course && item.courseId === course.id && item.sessionSnapshot && (
-                            <button className="button button--ghost archive-item__action" onClick={() => handleRestoreJourney(item)}>恢复</button>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  </section>
-                )}
-              </div>
+              <EmptyState title="正在进入自学界面" description="系统正在自动创建匿名学习会话，请稍候片刻。" />
             ) : (
               <div className="study-space">
                 <div className="learner-strip">
@@ -1090,12 +968,12 @@ function App() {
                     <div className="passport-card__avatar">{session.avatarText}</div>
                     <div className="passport-card__content">
                       <span className="eyebrow">学习中</span>
-                      <h3>{session.learnerName} 的闯关地图</h3>
+                      <h3>当前自学旅程</h3>
                       <p>已完成 {session.clearedModules.length} / {course.modules.length} 关。完成每关后会解锁下一关与成就徽章。</p>
                       <div className="passport-card__meta">
-                        <span>{session.learnerClass || '未填写班级入口'}</span>
-                        <span>{session.learningGoal || '尚未设置学习目标'}</span>
+                        <span>匿名学习模式</span>
                         <span>当前模式：{currentCoachMode}</span>
+                        <span>{course.agentProfile.name} 陪练中</span>
                       </div>
                     </div>
                   </div>
