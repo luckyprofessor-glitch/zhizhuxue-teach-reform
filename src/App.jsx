@@ -33,12 +33,14 @@ import {
 } from './utils/llm.js'
 import {
   STORAGE_KEYS,
+  buildJourneyRecord,
   calculateLevel,
   clearStoredItem,
   createStudySession,
   ensureBadge,
   loadStoredJson,
   saveStoredJson,
+  upsertJourneyHistory,
 } from './utils/study.js'
 
 const DEMO_TEXT = `
@@ -68,6 +70,7 @@ function App() {
   const initialCourse = loadStoredJson(STORAGE_KEYS.course, null)
   const initialSession = loadStoredJson(STORAGE_KEYS.session, null)
   const initialAiConfig = loadStoredJson(STORAGE_KEYS.aiConfig, DEFAULT_AI_CONFIG)
+  const initialHistory = loadStoredJson(STORAGE_KEYS.history, [])
 
   const [builderForm, setBuilderForm] = useState({
     ...DEFAULT_FORM,
@@ -80,8 +83,11 @@ function App() {
   })
   const [course, setCourse] = useState(initialCourse)
   const [session, setSession] = useState(initialSession?.courseId === initialCourse?.id ? initialSession : null)
+  const [history, setHistory] = useState(initialHistory)
   const [uploadedFiles, setUploadedFiles] = useState([])
   const [learnerName, setLearnerName] = useState(initialSession?.learnerName || '')
+  const [learnerClass, setLearnerClass] = useState(initialSession?.learnerClass || '')
+  const [learningGoal, setLearningGoal] = useState(initialSession?.learningGoal || '')
   const [chatInput, setChatInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [chatLoading, setChatLoading] = useState(false)
@@ -107,6 +113,16 @@ function App() {
   useEffect(() => {
     saveStoredJson(STORAGE_KEYS.aiConfig, aiConfig)
   }, [aiConfig])
+
+  useEffect(() => {
+    saveStoredJson(STORAGE_KEYS.history, history)
+  }, [history])
+
+  useEffect(() => {
+    if (course && session) {
+      setHistory((prev) => upsertJourneyHistory(prev, buildJourneyRecord(course, session)))
+    }
+  }, [course, session])
 
   const aiReady = canUseRealAI(aiConfig)
   const aiGenerationEnabled = aiReady && aiConfig.useForCourseGeneration
@@ -135,6 +151,8 @@ function App() {
   const quickPrompts = currentModule ? getQuickPrompts(currentModule, currentCoachMode) : []
   const teacherActionPrompts = currentModule ? getTeacherActionPrompts(currentModule, learningDiagnosis) : []
   const generationLabel = course?.runtime?.generator === 'llm' ? '真实大模型优化' : '本地生成'
+  const recentHistory = history.slice(0, 6)
+  const coverKeywords = course?.keywords?.slice(0, 3) || []
 
   function updateForm(name, value) {
     setBuilderForm((prev) => ({ ...prev, [name]: value }))
@@ -206,6 +224,8 @@ function App() {
       setCourse(nextCourse)
       setSession(null)
       setLearnerName('')
+      setLearnerClass('')
+      setLearningGoal('')
       setChatInput('')
       setNotice(courseNotice)
     } catch (buildError) {
@@ -230,6 +250,8 @@ function App() {
     setCourse(demoCourse)
     setSession(null)
     setLearnerName('')
+    setLearnerClass('')
+    setLearningGoal('')
     setChatInput('')
     setError('')
     setNotice('已载入示例课件。你可以直接体验“上传课件—AI 生成关卡—学生闯关—智能体陪学”的完整流程。')
@@ -238,13 +260,17 @@ function App() {
   function handleResetAll() {
     setCourse(null)
     setSession(null)
+    setHistory([])
     setUploadedFiles([])
     setLearnerName('')
+    setLearnerClass('')
+    setLearningGoal('')
     setChatInput('')
     setError('')
     setNotice('已清空当前课件、学习旅程与本地缓存。')
     clearStoredItem(STORAGE_KEYS.course)
     clearStoredItem(STORAGE_KEYS.session)
+    clearStoredItem(STORAGE_KEYS.history)
   }
 
   function handleClearAiConfig() {
@@ -260,7 +286,11 @@ function App() {
     }
 
     const name = learnerName.trim() || '同学'
-    const nextSession = createStudySession(course, name)
+    const nextSession = createStudySession(course, {
+      learnerName: name,
+      learnerClass: learnerClass.trim(),
+      learningGoal: learningGoal.trim(),
+    })
     nextSession.chatHistory = [
       ...createOpeningMessages(course, name),
       createChatMessage(
@@ -274,6 +304,8 @@ function App() {
 
     setSession(nextSession)
     setLearnerName(name)
+    setLearnerClass(learnerClass.trim())
+    setLearningGoal(learningGoal.trim())
     setError('')
     setNotice(`${name} 的自学旅程已开始。现在可以一边闯关，一边和智能体对话。`)
   }
@@ -723,6 +755,22 @@ function App() {
                   <span className="pill">{course.subtitle}</span>
                 </div>
 
+                <div className="cover-card">
+                  <div>
+                    <span className="eyebrow">课程封面</span>
+                    <h4>{course.title}</h4>
+                    <p>{course.description}</p>
+                    <div className="tag-list">
+                      {coverKeywords.map((item) => <span className="tag" key={item}>{item}</span>)}
+                    </div>
+                  </div>
+                  <div className="cover-card__meta">
+                    <span>{course.sourceStructure === 'slide-based' ? 'PPT页级闯关' : course.sourceStructure === 'page-based' ? 'PDF页级闯关' : '文本语义闯关'}</span>
+                    <strong>{generationLabel}</strong>
+                    <span>{course.agentProfile.name}</span>
+                  </div>
+                </div>
+
                 <div className="stat-grid">
                   <StatCard label="关卡数" value={course.modules.length} description="自动从课件中拆解出的学习单元" />
                   <StatCard label="预计时长" value={`${course.estimatedMinutes} 分钟`} description="按文本长度估算的自学时长" />
@@ -817,19 +865,64 @@ function App() {
                     <input
                       value={learnerName}
                       onChange={(e) => setLearnerName(e.target.value)}
-                      placeholder="例如：小林 / 2026社工1班 / 学习者A"
+                      placeholder="例如：小林 / 学习者A"
+                    />
+                  </Field>
+                  <Field label="班级／课程入口（选填）">
+                    <input
+                      value={learnerClass}
+                      onChange={(e) => setLearnerClass(e.target.value)}
+                      placeholder="例如：2026社工1班 / 社会工作导论"
+                    />
+                  </Field>
+                  <Field label="本次学习目标（选填）">
+                    <input
+                      value={learningGoal}
+                      onChange={(e) => setLearningGoal(e.target.value)}
+                      placeholder="例如：想搞懂优势视角怎么落地"
                     />
                   </Field>
                   <button className="button" onClick={handleStartJourney}>开始闯关</button>
                 </div>
+
+                {recentHistory.length > 0 && (
+                  <section className="archive-panel">
+                    <div className="archive-panel__head">
+                      <div>
+                        <h3>最近学习档案</h3>
+                        <p>当前浏览器会保留最近的自学记录，方便展示产品化形态。</p>
+                      </div>
+                    </div>
+                    <div className="archive-list">
+                      {recentHistory.map((item) => (
+                        <article className="archive-item" key={item.id}>
+                          <div className="archive-item__avatar">{item.avatarText}</div>
+                          <div className="archive-item__content">
+                            <strong>{item.learnerName} · {item.courseTitle}</strong>
+                            <p>{item.learnerClass || '未填写班级'}{item.learningGoal ? `｜目标：${item.learningGoal}` : ''}</p>
+                            <p>进度 {item.progressPercent}% ｜ Lv.{item.level} ｜ 徽章 {item.badges.length}</p>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                )}
               </div>
             ) : (
               <div className="study-space">
                 <div className="learner-strip">
-                  <div>
-                    <span className="eyebrow">学习中</span>
-                    <h3>{session.learnerName} 的闯关地图</h3>
-                    <p>已完成 {session.clearedModules.length} / {course.modules.length} 关。完成每关后会解锁下一关与成就徽章。</p>
+                  <div className="passport-card">
+                    <div className="passport-card__avatar">{session.avatarText}</div>
+                    <div className="passport-card__content">
+                      <span className="eyebrow">学习中</span>
+                      <h3>{session.learnerName} 的闯关地图</h3>
+                      <p>已完成 {session.clearedModules.length} / {course.modules.length} 关。完成每关后会解锁下一关与成就徽章。</p>
+                      <div className="passport-card__meta">
+                        <span>{session.learnerClass || '未填写班级入口'}</span>
+                        <span>{session.learningGoal || '尚未设置学习目标'}</span>
+                        <span>当前模式：{currentCoachMode}</span>
+                      </div>
+                    </div>
                   </div>
                   <div className="stat-grid stat-grid--compact">
                     <StatCard label="等级" value={`Lv.${session.level}`} description="随经验值提升" />

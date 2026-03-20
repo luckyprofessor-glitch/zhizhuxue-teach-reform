@@ -378,6 +378,41 @@
   font-size: 28px;
 }
 
+.cover-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 18px;
+  padding: 20px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.12), rgba(14, 165, 233, 0.1));
+  margin: 18px 0 8px;
+}
+
+.cover-card h4 {
+  margin: 10px 0 8px;
+  font-size: 24px;
+}
+
+.cover-card p {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
+.cover-card__meta {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.cover-card__meta strong {
+  font-size: 18px;
+  color: var(--text);
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -538,6 +573,62 @@
   max-width: 420px;
 }
 
+.archive-panel {
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.archive-panel__head {
+  margin-bottom: 14px;
+}
+
+.archive-panel__head h3,
+.archive-item__content strong {
+  margin: 0 0 6px;
+}
+
+.archive-panel__head p,
+.archive-item__content p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.archive-list {
+  display: grid;
+  gap: 12px;
+}
+
+.archive-item {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.archive-item__avatar,
+.passport-card__avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.18), rgba(14, 165, 233, 0.18));
+  color: var(--accent);
+  font-weight: 800;
+  flex: 0 0 auto;
+}
+
+.archive-item__content {
+  display: grid;
+  gap: 4px;
+}
+
 .study-space {
   display: grid;
   gap: 20px;
@@ -548,6 +639,41 @@
   grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
   gap: 18px;
   align-items: start;
+}
+
+.passport-card {
+  display: flex;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.passport-card__content {
+  display: grid;
+  gap: 8px;
+}
+
+.passport-card__content h3,
+.passport-card__content p {
+  margin: 0;
+}
+
+.passport-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.passport-card__meta span {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(79, 70, 229, 0.08);
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .progress-bar-wrap {
@@ -1016,8 +1142,13 @@
   .agent-meta,
   .card__header,
   .config-panel__head,
-  .coach-panel__head {
+  .coach-panel__head,
+  .source-map__item {
     flex-direction: column;
+  }
+
+  .cover-card {
+    grid-template-columns: 1fr;
   }
 
   .stage-hero__meta {
