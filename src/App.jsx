@@ -7,20 +7,25 @@ import {
   SOCIAL_WORK_LENSES,
 } from './utils/gamification.js'
 import {
+  createChatMessage,
+  createCompletionMessage,
+  createFinalBossFeedback,
+  createModuleArrivalMessage,
+  createOpeningMessages,
+  createQuizFeedback,
+  createReflectionFeedback,
+  generateAgentReply,
+  getQuickPrompts,
+} from './utils/agent.js'
+import {
   STORAGE_KEYS,
-  assignParticipant,
-  buildLogEntry,
   calculateLevel,
-  calculateStudyStats,
   clearStoredItem,
-  createEmptySession,
-  downloadCsv,
-  downloadJson,
+  createStudySession,
   ensureBadge,
-  getProgressStorageKey,
   loadStoredJson,
   saveStoredJson,
-} from './utils/experiment.js'
+} from './utils/study.js'
 
 const DEMO_TEXT = `
 游戏化学习与社会工作课程融合示例
@@ -29,54 +34,36 @@ const DEMO_TEXT = `
 
 社会工作教育强调人在情境中、优势视角与赋能逻辑。教师在设计学习活动时，应帮助学生看到自己的已有资源，理解个体与环境的互动，并通过支持性反馈增强持续参与。将社工理念嵌入课程，可以提升同理心、行动感与社会责任。
 
-人工智能可以自动抽取课件文本、识别高频概念、生成测验题和学习建议。AI 还可以根据学生答题表现给出差异化提示，帮助教师识别高风险知识点，优化课件结构与教学流程。
+人工智能可以自动抽取课件文本、识别高频概念、生成测验题和学习建议。AI 还可以根据学生提问即时给出解释、案例、提示与复盘建议，帮助学生在自学时保持方向感。
 
-游戏化机制包括关卡任务、经验值、成就徽章、剧情叙事与协作挑战。有效的游戏化不是简单加分，而是把目标、反馈、成长路径与行为激励组织成一套结构化学习体验，使学生愿意持续投入。
+游戏化机制包括关卡任务、经验值、成就徽章、剧情叙事与情境挑战。有效的游戏化不是简单加分，而是把目标、反馈、成长路径与行为激励组织成一套结构化学习体验，使学生愿意持续投入。
 
-在教改实验中，可以采用随机对照实验。学生输入被试编号后自动分入实验组或对照组。实验组体验 AI 社工游戏化页面，对照组使用常规数字课件。研究者比较两组在知识测验、学习投入、满意度与社工价值认同上的差异。
-
-为了保证数据质量，平台应记录前测、答题过程、反思文本、完成时间与后测结果，并支持导出 JSON、CSV。正式实施前，还应补充知情同意、匿名化与退出机制。
+理想的自学平台应允许教师上传 PPT、PDF 或讲义，系统自动生成关卡、情境任务、即时测验与 AI 对话式陪练。学生可以边学边问，边闯关边迁移，从而形成更主动的学习过程。
 `
 
-const PRETEST_FIELDS = [
-  { name: 'priorKnowledge', label: '我对该主题的先验了解程度', type: 'scale' },
-  { name: 'digitalInterest', label: '我对数字化学习方式的兴趣', type: 'scale' },
-  { name: 'aiAcceptance', label: '我对 AI 辅助学习的接受度', type: 'scale' },
-  { name: 'expectation', label: '请用一句话写下你本次学习的期待', type: 'textarea' },
-]
-
-const POSTTEST_FIELDS = [
-  { name: 'perceivedLearning', label: '我认为本次学习提升了我的理解', type: 'scale' },
-  { name: 'engagement', label: '我在学习过程中保持了投入', type: 'scale' },
-  { name: 'continueUse', label: '我愿意继续使用这种学习方式', type: 'scale' },
-  { name: 'socialWorkIdentity', label: '我能感受到社工理念对学习的帮助', type: 'scale' },
-  { name: 'takeaway', label: '请概括你最大的收获', type: 'textarea' },
-]
-
 const DEFAULT_FORM = {
-  courseTitle: 'AI × 社工理念 × 游戏化课件平台',
-  studyTitle: 'AI社工游戏化学习效果随机对照实验',
+  courseTitle: '智助学｜AI游戏化课件自学工具',
   targetLearners: '本科生',
   socialLens: '优势视角',
   gameStyle: '闯关式',
-  armCount: 2,
   moduleCount: 5,
-  studySeed: 'teach-reform-2026',
+  agentName: '智助灵',
 }
 
 function App() {
-  const storedCourse = loadStoredJson(STORAGE_KEYS.course, null)
+  const initialCourse = loadStoredJson(STORAGE_KEYS.course, null)
+  const initialSession = loadStoredJson(STORAGE_KEYS.session, null)
+
   const [builderForm, setBuilderForm] = useState({
     ...DEFAULT_FORM,
-    ...(storedCourse?.settings || {}),
-    courseTitle: storedCourse?.title || DEFAULT_FORM.courseTitle,
-    studyTitle: storedCourse?.experiment?.studyTitle || DEFAULT_FORM.studyTitle,
+    ...(initialCourse?.settings || {}),
+    courseTitle: initialCourse?.title || DEFAULT_FORM.courseTitle,
   })
-  const [course, setCourse] = useState(storedCourse)
-  const [logs, setLogs] = useState(loadStoredJson(STORAGE_KEYS.logs, []))
+  const [course, setCourse] = useState(initialCourse)
+  const [session, setSession] = useState(initialSession?.courseId === initialCourse?.id ? initialSession : null)
   const [uploadedFiles, setUploadedFiles] = useState([])
-  const [participantId, setParticipantId] = useState('')
-  const [studentSession, setStudentSession] = useState(null)
+  const [learnerName, setLearnerName] = useState(initialSession?.learnerName || '')
+  const [chatInput, setChatInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
@@ -90,26 +77,28 @@ function App() {
   }, [course])
 
   useEffect(() => {
-    saveStoredJson(STORAGE_KEYS.logs, logs)
-  }, [logs])
-
-  useEffect(() => {
-    if (studentSession?.courseId && studentSession?.participantId) {
-      saveStoredJson(getProgressStorageKey(studentSession.courseId, studentSession.participantId), studentSession)
+    if (session && session.courseId === course?.id) {
+      saveStoredJson(STORAGE_KEYS.session, session)
+    } else {
+      clearStoredItem(STORAGE_KEYS.session)
     }
-  }, [studentSession])
+  }, [session, course])
 
-  const stats = useMemo(() => calculateStudyStats(logs, course?.experiment), [logs, course])
-  const currentModule = course && studentSession ? course.modules[studentSession.currentIndex] : null
-  const currentAnswer = currentModule && studentSession ? studentSession.answers[currentModule.id] : null
-  const completionRatio = course && studentSession ? Object.keys(studentSession.answers).length / course.modules.length : 0
+  const currentModule = useMemo(() => {
+    if (!course) return null
+    if (!session) return course.modules[0] || null
+    return course.modules[session.currentModuleIndex] || course.modules[0] || null
+  }, [course, session])
+
+  const currentAnswer = currentModule && session ? session.answers[currentModule.id] : null
+  const currentReflection = currentModule && session ? session.reflections[currentModule.id] || '' : ''
+  const allModulesCleared = course && session ? session.clearedModules.length === course.modules.length : false
+  const progressPercent = course && session ? Math.round((session.clearedModules.length / course.modules.length) * 100) : 0
+  const readyToClearCurrent = Boolean(currentAnswer && currentReflection.trim() && currentModule && session && !session.clearedModules.includes(currentModule.id))
+  const quickPrompts = currentModule ? getQuickPrompts(currentModule) : []
 
   function updateForm(name, value) {
     setBuilderForm((prev) => ({ ...prev, [name]: value }))
-  }
-
-  function appendLog(payload) {
-    setLogs((prev) => [buildLogEntry(payload), ...prev].slice(0, 5000))
   }
 
   async function handleGenerateCourse() {
@@ -130,7 +119,7 @@ function App() {
 
       const combinedText = extracted.map((item) => item.text).filter(Boolean).join('\n\n')
       if (!combinedText.trim()) {
-        throw new Error('已读取文件，但没有提取到有效文本。请尝试上传可复制文本的 PDF、PPTX、DOCX 或 TXT。')
+        throw new Error('已读取文件，但没有提取到有效文本。请尝试上传可复制文字的 PDF、PPTX、DOCX 或 TXT。')
       }
 
       const nextCourse = buildCourseFromText(
@@ -141,9 +130,11 @@ function App() {
       )
 
       setCourse(nextCourse)
-      setParticipantId('')
-      setStudentSession(null)
-      setNotice('课件已成功游戏化。你现在可以直接让学生进入实验。')
+      setSession(null)
+      setLearnerName('')
+      setChatInput('')
+      setError('')
+      setNotice('课件已成功转化为可互动的游戏化自学地图。接下来只需输入学习者昵称，开始闯关。')
     } catch (buildError) {
       setError(buildError.message || '生成失败，请重试。')
     } finally {
@@ -155,260 +146,255 @@ function App() {
     const demoCourse = buildCourseFromText(
       DEMO_TEXT,
       builderForm,
-      [{ name: '教改项目示例课件.txt', extension: 'txt', size: DEMO_TEXT.length, type: 'text/plain' }],
+      [{ name: '游戏化自学示例课件.txt', extension: 'txt', size: DEMO_TEXT.length, type: 'text/plain' }],
       [],
     )
 
     setCourse(demoCourse)
-    setParticipantId('')
-    setStudentSession(null)
+    setSession(null)
+    setLearnerName('')
+    setChatInput('')
     setError('')
-    setNotice('已载入示例课件。你可以直接体验完整流程。')
-  }
-
-  function clearAllProgressKeys() {
-    if (typeof window === 'undefined') {
-      return
-    }
-
-    const keys = []
-    for (let i = 0; i < window.localStorage.length; i += 1) {
-      const key = window.localStorage.key(i)
-      if (key && key.startsWith('teach-reform-progress:')) {
-        keys.push(key)
-      }
-    }
-    keys.forEach((key) => window.localStorage.removeItem(key))
+    setNotice('已载入示例课件。你可以直接开始体验“上传课件—智能体陪学—闯关自学”的完整流程。')
   }
 
   function handleResetAll() {
     setCourse(null)
-    setLogs([])
+    setSession(null)
     setUploadedFiles([])
-    setParticipantId('')
-    setStudentSession(null)
+    setLearnerName('')
+    setChatInput('')
     setError('')
-    setNotice('已清空课程、日志与本地进度。')
+    setNotice('已清空当前课件、学习旅程与本地缓存。')
     clearStoredItem(STORAGE_KEYS.course)
-    clearStoredItem(STORAGE_KEYS.logs)
-    clearAllProgressKeys()
+    clearStoredItem(STORAGE_KEYS.session)
   }
 
-  function handleEnterStudy() {
+  function handleStartJourney() {
     if (!course) {
-      setError('请先在上方生成课程。')
+      setError('请先上传并生成课程。')
       return
     }
 
-    const cleanId = participantId.trim()
-    if (!cleanId) {
-      setError('请输入被试编号。')
-      return
-    }
+    const name = learnerName.trim() || '同学'
+    const nextSession = createStudySession(course, name)
+    nextSession.chatHistory = [
+      ...createOpeningMessages(course, name),
+      createModuleArrivalMessage(course.modules[0]),
+    ]
 
-    const arm = assignParticipant(cleanId, course.experiment)
-    const progressKey = getProgressStorageKey(course.id, cleanId)
-    const existingSession = loadStoredJson(progressKey, null)
-    const nextSession = existingSession?.courseId === course.id
-      ? { ...existingSession, arm }
-      : createEmptySession(course, cleanId, arm)
-
-    setStudentSession(nextSession)
+    setSession(nextSession)
+    setLearnerName(name)
     setError('')
-    setNotice(`被试 ${cleanId} 已进入 ${arm.name}。`)
-
-    if (!existingSession) {
-      appendLog({
-        courseId: course.id,
-        participantId: cleanId,
-        armId: arm.id,
-        armName: arm.name,
-        eventType: 'study_entered',
-      })
-    }
+    setNotice(`${name} 的自学旅程已开始。现在可以一边闯关，一边和智能体对话。`)
   }
 
-  function handleRestartParticipant() {
-    if (!course || !participantId.trim()) {
+  function handleRestartJourney() {
+    clearStoredItem(STORAGE_KEYS.session)
+    setSession(null)
+    setChatInput('')
+    setNotice('已重置当前学习旅程。你可以重新开始闯关。')
+  }
+
+  function handleSelectModule(index) {
+    if (!course || !session) {
+      setError('请先开始自学旅程。')
       return
     }
 
-    clearStoredItem(getProgressStorageKey(course.id, participantId.trim()))
-    setStudentSession(null)
-    setNotice('该被试的本地进度已清空。可重新进入实验。')
-  }
-
-  function handlePretestSubmit(values) {
-    if (!studentSession || !course) {
+    if (index > session.clearedModules.length) {
+      setNotice('请先完成前一关，再解锁后续关卡。')
       return
     }
 
-    setStudentSession((prev) => ({ ...prev, pretest: values }))
-    appendLog({
-      courseId: course.id,
-      participantId: studentSession.participantId,
-      armId: studentSession.armId,
-      eventType: 'pretest_submitted',
-      ...values,
-    })
-    setNotice('前测已保存，开始学习吧。')
+    const nextModule = course.modules[index]
+    setSession((prev) => ({
+      ...prev,
+      currentModuleIndex: index,
+      chatHistory: [...prev.chatHistory, createModuleArrivalMessage(nextModule)],
+    }))
+    setError('')
   }
 
   function handleQuizSubmit(module, selectedIndex) {
-    if (!studentSession || currentAnswer) {
+    if (!session || !course || selectedIndex < 0) {
+      setError('请先选择一个答案。')
+      return
+    }
+
+    if (session.answers[module.id]) {
       return
     }
 
     const isCorrect = selectedIndex === module.quiz.correctIndex
-    const gainedXp = studentSession.arm.gamified ? (isCorrect ? module.xp : Math.round(module.xp / 2)) : 0
-    const nextXp = studentSession.xp + gainedXp
-    const nextBadges = studentSession.arm.gamified && isCorrect
-      ? ensureBadge(studentSession.badges, module.badge)
-      : studentSession.badges
+    const gainedXp = isCorrect ? 20 : 12
+    const reply = createQuizFeedback(module, isCorrect)
 
-    setStudentSession((prev) => ({
-      ...prev,
-      xp: nextXp,
-      level: calculateLevel(nextXp),
-      badges: nextBadges,
-      answers: {
-        ...prev.answers,
-        [module.id]: {
-          selectedIndex,
-          isCorrect,
-          score: isCorrect ? 1 : 0,
-          submittedAt: new Date().toISOString(),
+    setSession((prev) => {
+      const nextXp = prev.xp + gainedXp
+      return {
+        ...prev,
+        xp: nextXp,
+        level: calculateLevel(nextXp),
+        answers: {
+          ...prev.answers,
+          [module.id]: {
+            selectedIndex,
+            isCorrect,
+            submittedAt: new Date().toISOString(),
+          },
         },
-      },
-    }))
-
-    appendLog({
-      courseId: course.id,
-      participantId: studentSession.participantId,
-      armId: studentSession.armId,
-      eventType: 'quiz_submitted',
-      moduleId: module.id,
-      moduleTitle: module.title,
-      selectedIndex,
-      correctIndex: module.quiz.correctIndex,
-      isCorrect,
-      score: isCorrect ? 1 : 0,
-      xpAfter: nextXp,
-    })
-  }
-
-  function handleReflectionSave(module, text) {
-    if (!studentSession || !text.trim()) {
-      return
-    }
-
-    const isFirstSave = !studentSession.reflections[module.id]
-    const gainedXp = studentSession.arm.gamified && isFirstSave ? 10 : 0
-    const nextXp = studentSession.xp + gainedXp
-
-    setStudentSession((prev) => ({
-      ...prev,
-      xp: nextXp,
-      level: calculateLevel(nextXp),
-      reflections: {
-        ...prev.reflections,
-        [module.id]: text.trim(),
-      },
-    }))
-
-    appendLog({
-      courseId: course.id,
-      participantId: studentSession.participantId,
-      armId: studentSession.armId,
-      eventType: 'reflection_saved',
-      moduleId: module.id,
-      moduleTitle: module.title,
-      textLength: text.trim().length,
-    })
-
-    setNotice('反思已保存。')
-  }
-
-  function moveModule(step) {
-    if (!studentSession || !course) {
-      return
-    }
-
-    setStudentSession((prev) => ({
-      ...prev,
-      currentIndex: clamp(prev.currentIndex + step, 0, course.modules.length - 1),
-    }))
-  }
-
-  function handleFinishStudy() {
-    if (!studentSession || !course) {
-      return
-    }
-
-    const answeredCount = Object.keys(studentSession.answers).length
-    if (answeredCount < course.modules.length) {
-      setError(`请先完成全部 ${course.modules.length} 个关卡的测验。`)
-      return
-    }
-
-    const accuracy = calculateAccuracy(studentSession.answers)
-    const completedAt = new Date().toISOString()
-
-    setStudentSession((prev) => ({
-      ...prev,
-      finished: true,
-      completedAt,
-    }))
-
-    appendLog({
-      courseId: course.id,
-      participantId: studentSession.participantId,
-      armId: studentSession.armId,
-      eventType: 'study_completed',
-      accuracy,
-      xp: studentSession.xp,
+        chatHistory: [...prev.chatHistory, reply],
+      }
     })
 
     setError('')
-    setNotice('学习任务已完成，请继续完成后测。')
+    setNotice(isCorrect ? '回答正确，已获得经验值。' : '答案已提交。可以参考智能体提示后继续完善理解。')
   }
 
-  function handlePosttestSubmit(values) {
-    if (!studentSession || !course) {
+  function handleReflectionSave(module, text) {
+    if (!session || !course) {
+      setError('请先开始自学旅程。')
       return
     }
 
-    setStudentSession((prev) => ({ ...prev, posttest: values }))
-    appendLog({
-      courseId: course.id,
-      participantId: studentSession.participantId,
-      armId: studentSession.armId,
-      eventType: 'posttest_submitted',
-      ...values,
+    if (!text.trim()) {
+      setError('请先写下你的应用反思，再保存。')
+      return
+    }
+
+    const firstSave = !session.reflections[module.id]
+    const gainedXp = firstSave ? 20 : 0
+    const reply = createReflectionFeedback(module, text, firstSave)
+
+    setSession((prev) => {
+      const nextXp = prev.xp + gainedXp
+      return {
+        ...prev,
+        xp: nextXp,
+        level: calculateLevel(nextXp),
+        reflections: {
+          ...prev.reflections,
+          [module.id]: text.trim(),
+        },
+        chatHistory: [...prev.chatHistory, reply],
+      }
     })
-    setNotice('后测已保存，实验数据已记录。')
+
+    setError('')
+    setNotice(firstSave ? '应用反思已保存，并计入成长进度。' : '应用反思已更新。')
   }
 
-  function handleExportJson() {
-    downloadJson(`教改实验日志_${formatDateStamp()}.json`, logs)
+  function handleCompleteModule(module) {
+    if (!session || !course || !currentModule) {
+      return
+    }
+
+    const hasAnswer = Boolean(session.answers[module.id])
+    const hasReflection = Boolean(session.reflections[module.id]?.trim())
+    if (!hasAnswer || !hasReflection) {
+      setError('请先完成本关测验和应用反思，再解锁下一关。')
+      return
+    }
+
+    if (session.clearedModules.includes(module.id)) {
+      setNotice('这一关已经完成。你可以继续回顾或前往下一关。')
+      return
+    }
+
+    const isLastModule = session.currentModuleIndex === course.modules.length - 1
+    const completionMessage = createCompletionMessage(module, isLastModule)
+
+    setSession((prev) => {
+      const nextXp = prev.xp + module.xp
+      const nextIndex = isLastModule ? prev.currentModuleIndex : prev.currentModuleIndex + 1
+      const nextMessages = [completionMessage]
+
+      if (!isLastModule) {
+        nextMessages.push(createModuleArrivalMessage(course.modules[nextIndex]))
+      }
+
+      return {
+        ...prev,
+        xp: nextXp,
+        level: calculateLevel(nextXp),
+        badges: ensureBadge(prev.badges, module.badge),
+        clearedModules: [...prev.clearedModules, module.id],
+        currentModuleIndex: nextIndex,
+        chatHistory: [...prev.chatHistory, ...nextMessages],
+      }
+    })
+
+    setError('')
+    setNotice(isLastModule ? '全部主线关卡已通关，终局任务已开启。' : '本关完成，下一关已解锁。')
   }
 
-  function handleExportCsv() {
-    downloadCsv(`教改实验日志_${formatDateStamp()}.csv`, logs)
+  function handleSaveFinalReflection(text) {
+    if (!session || !course) {
+      setError('请先开始学习旅程。')
+      return
+    }
+
+    if (!text.trim()) {
+      setError('请先写下终局任务方案。')
+      return
+    }
+
+    const firstSubmit = !session.finalBossDone
+    const gainedXp = firstSubmit ? 120 : 0
+    const reply = createFinalBossFeedback(course, text)
+
+    setSession((prev) => {
+      const nextXp = prev.xp + gainedXp
+      return {
+        ...prev,
+        xp: nextXp,
+        level: calculateLevel(nextXp),
+        badges: firstSubmit ? ensureBadge(prev.badges, '终局设计师') : prev.badges,
+        finalReflection: text.trim(),
+        finalBossDone: true,
+        chatHistory: [...prev.chatHistory, reply],
+      }
+    })
+
+    setError('')
+    setNotice(firstSubmit ? '终局任务已提交，恭喜完成整段自学旅程。' : '终局任务方案已更新。')
   }
 
-  const aiCoachMessage = currentModule && studentSession
-    ? buildCoachMessage(currentModule, studentSession)
-    : ''
+  function handleSendChat(presetMessage) {
+    if (!course || !session || !currentModule) {
+      setError('请先开始自学旅程，再与智能体互动。')
+      return
+    }
+
+    const message = (presetMessage || chatInput).trim()
+    if (!message) {
+      return
+    }
+
+    const reply = generateAgentReply({
+      course,
+      module: currentModule,
+      session,
+      message,
+    })
+
+    setSession((prev) => ({
+      ...prev,
+      chatHistory: [...prev.chatHistory, createChatMessage('user', message), reply],
+    }))
+    setChatInput('')
+    setError('')
+  }
 
   return (
     <div className="app-shell">
       <header className="hero-banner">
         <div>
-          <span className="hero-banner__eyebrow">教改项目网页原型</span>
-          <h1>智助学：AI × 社工理念 × 游戏化课件平台</h1>
+          <span className="hero-banner__eyebrow">AI 自学工具原型</span>
+          <h1>智助学：上传课件后，让智能体把它变成闯关式自主学习</h1>
           <p className="hero-banner__lead">
-            上传课件后，系统会自动抽取文本、生成闯关任务、嵌入社工理论透镜，并支持随机对照实验与过程数据导出。
+            这个版本不再做分组、测量或实验入口，而是专注做一个学生可直接使用的自学工具：上传 PPT、PDF 或讲义后，系统自动拆成关卡，学生可与智能体边学边问边闯关。
           </p>
         </div>
         <div className="hero-banner__actions">
@@ -424,467 +410,380 @@ function App() {
         </section>
       )}
 
-      <section className="panel-grid panel-grid--builder">
-        <div className="card card--sticky">
-          <div className="card__header">
-            <div>
-              <h2>一、教师设计台</h2>
-              <p>上传任意常见课件，然后配置社工透镜、游戏方式与实验分组。</p>
+      <section className="workspace">
+        <aside className="workspace__builder">
+          <div className="card card--sticky">
+            <div className="card__header">
+              <div>
+                <h2>一、上传课件并生成自学地图</h2>
+                <p>教师只需要上传课件，系统会自动重组为关卡、任务、测验和智能体陪练内容。</p>
+              </div>
             </div>
-          </div>
 
-          <label className="upload-box">
-            <input
-              type="file"
-              accept=".pdf,.pptx,.docx,.txt,.md,.html,.htm,.csv,.json"
-              multiple
-              onChange={(event) => setUploadedFiles(Array.from(event.target.files || []))}
-            />
-            <span className="upload-box__title">点击上传或替换课件文件</span>
-            <span className="upload-box__hint">支持 PDF、PPTX、DOCX、TXT、MD、HTML。扫描件可在后续接入 OCR。</span>
-          </label>
+            <label className="upload-box">
+              <input
+                type="file"
+                accept=".pdf,.pptx,.docx,.txt,.md,.html,.htm,.csv,.json"
+                multiple
+                onChange={(event) => setUploadedFiles(Array.from(event.target.files || []))}
+              />
+              <span className="upload-box__title">点击上传课件文件</span>
+              <span className="upload-box__hint">支持 PDF、PPTX、DOCX、TXT、MD、HTML。若是扫描件，后续可接 OCR。</span>
+            </label>
 
-          <div className="file-list">
-            {uploadedFiles.length === 0 ? (
-              <p className="muted">尚未选择文件。</p>
-            ) : (
-              uploadedFiles.map((file) => (
-                <div className="file-chip" key={`${file.name}-${file.size}`}>
-                  <span>{file.name}</span>
-                  <span className="muted">{formatFileSize(file.size)}</span>
-                </div>
-              ))
-            )}
-          </div>
-
-          <div className="form-grid">
-            <Field label="课程名称">
-              <input value={builderForm.courseTitle} onChange={(e) => updateForm('courseTitle', e.target.value)} />
-            </Field>
-            <Field label="研究标题">
-              <input value={builderForm.studyTitle} onChange={(e) => updateForm('studyTitle', e.target.value)} />
-            </Field>
-            <Field label="适用对象">
-              <input value={builderForm.targetLearners} onChange={(e) => updateForm('targetLearners', e.target.value)} />
-            </Field>
-            <Field label="社工理论透镜">
-              <select value={builderForm.socialLens} onChange={(e) => updateForm('socialLens', e.target.value)}>
-                {Object.keys(SOCIAL_WORK_LENSES).map((key) => (
-                  <option key={key} value={key}>{key}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="游戏化风格">
-              <select value={builderForm.gameStyle} onChange={(e) => updateForm('gameStyle', e.target.value)}>
-                {Object.keys(GAME_STYLES).map((key) => (
-                  <option key={key} value={key}>{key}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="实验组数量">
-              <select value={builderForm.armCount} onChange={(e) => updateForm('armCount', Number(e.target.value))}>
-                <option value={2}>2 组</option>
-                <option value={3}>3 组</option>
-              </select>
-            </Field>
-            <Field label="目标关卡数">
-              <select value={builderForm.moduleCount} onChange={(e) => updateForm('moduleCount', Number(e.target.value))}>
-                <option value={3}>3 个</option>
-                <option value={4}>4 个</option>
-                <option value={5}>5 个</option>
-                <option value={6}>6 个</option>
-              </select>
-            </Field>
-            <Field label="随机种子">
-              <input value={builderForm.studySeed} onChange={(e) => updateForm('studySeed', e.target.value)} />
-            </Field>
-          </div>
-
-          <button className="button" onClick={handleGenerateCourse} disabled={loading}>
-            {loading ? '正在解析并生成……' : '生成游戏化课程'}
-          </button>
-        </div>
-
-        <div className="card">
-          <div className="card__header">
-            <div>
-              <h2>二、课程总览</h2>
-              <p>这里会展示自动生成的课程摘要、AI 功能与研究设计。</p>
-            </div>
-          </div>
-
-          {!course ? (
-            <EmptyState
-              title="还没有生成课程"
-              description="先上传课件，或点击“载入示例”直接体验整套流程。"
-            />
-          ) : (
-            <>
-              <div className="summary-header">
-                <div>
-                  <h3>{course.title}</h3>
-                  <p>{course.description}</p>
-                </div>
-                <span className="pill">{course.subtitle}</span>
-              </div>
-
-              <div className="metric-grid">
-                <MetricCard label="关卡数" value={course.modules.length} description="自动从课件中拆解出来的学习单元" />
-                <MetricCard label="预计时长" value={`${course.estimatedMinutes} 分钟`} description="按文本长度估算的学习时长" />
-                <MetricCard label="实验分组" value={`${course.experiment.arms.length} 组`} description="支持随机对照实验" />
-                <MetricCard label="文本规模" value={`${course.totalCharacters} 字`} description="用于 AI 抽取与测验生成" />
-              </div>
-
-              <div className="info-grid">
-                <InfoBlock title="社工理论注入">
-                  <p>{course.theoryBridge.socialWork}</p>
-                </InfoBlock>
-                <InfoBlock title="AI 机制">
-                  <p>{course.theoryBridge.ai}</p>
-                </InfoBlock>
-                <InfoBlock title="教学法结构">
-                  <p>{course.theoryBridge.pedagogy}</p>
-                </InfoBlock>
-              </div>
-
-              <div className="two-column-list">
-                <InfoBlock title="学习目标">
-                  <ul>
-                    {course.learningObjectives.map((item) => <li key={item}>{item}</li>)}
-                  </ul>
-                </InfoBlock>
-                <InfoBlock title="关键词">
-                  <div className="tag-list">
-                    {course.keywords.slice(0, 10).map((item) => <span key={item} className="tag">{item}</span>)}
+            <div className="file-list">
+              {uploadedFiles.length === 0 ? (
+                <p className="muted">尚未选择文件。</p>
+              ) : (
+                uploadedFiles.map((file) => (
+                  <div className="file-chip" key={`${file.name}-${file.size}`}>
+                    <span>{file.name}</span>
+                    <span className="muted">{formatFileSize(file.size)}</span>
                   </div>
-                </InfoBlock>
-              </div>
+                ))
+              )}
+            </div>
 
-              <InfoBlock title="课件来源">
-                <div className="file-list file-list--compact">
-                  {course.sourceFiles.map((file) => (
-                    <div className="file-chip" key={`${file.name}-${file.size}`}>
-                      <span>{file.name}</span>
-                      <span className="muted">{file.extension || file.type || '未知格式'}</span>
-                    </div>
+            <div className="form-grid">
+              <Field label="课程名称">
+                <input value={builderForm.courseTitle} onChange={(e) => updateForm('courseTitle', e.target.value)} />
+              </Field>
+              <Field label="适用对象">
+                <input value={builderForm.targetLearners} onChange={(e) => updateForm('targetLearners', e.target.value)} />
+              </Field>
+              <Field label="社工理论透镜">
+                <select value={builderForm.socialLens} onChange={(e) => updateForm('socialLens', e.target.value)}>
+                  {Object.keys(SOCIAL_WORK_LENSES).map((key) => (
+                    <option key={key} value={key}>{key}</option>
                   ))}
-                </div>
-                {course.warnings.length > 0 && (
-                  <div className="warning-list">
-                    {course.warnings.map((item) => <p key={item}>提示：{item}</p>)}
-                  </div>
-                )}
-              </InfoBlock>
-            </>
-          )}
-        </div>
-      </section>
-
-      <section className="card">
-        <div className="card__header">
-          <div>
-            <h2>三、关卡与实验组预览</h2>
-            <p>教师可以先检查每个关卡生成结果，再让学生进入学习。</p>
-          </div>
-        </div>
-
-        {!course ? (
-          <EmptyState title="暂无关卡" description="生成课程后，这里会展示每个模块的游戏化设计。" />
-        ) : (
-          <>
-            <div className="arm-grid">
-              {course.experiment.arms.map((arm) => (
-                <div className="arm-card" key={arm.id}>
-                  <div className="arm-card__title">
-                    <h3>{arm.name}</h3>
-                    <span className="pill">{arm.id}</span>
-                  </div>
-                  <ul>
-                    {arm.features.map((feature) => <li key={feature}>{feature}</li>)}
-                  </ul>
-                </div>
-              ))}
+                </select>
+              </Field>
+              <Field label="游戏化风格">
+                <select value={builderForm.gameStyle} onChange={(e) => updateForm('gameStyle', e.target.value)}>
+                  {Object.keys(GAME_STYLES).map((key) => (
+                    <option key={key} value={key}>{key}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="目标关卡数">
+                <select value={builderForm.moduleCount} onChange={(e) => updateForm('moduleCount', Number(e.target.value))}>
+                  <option value={3}>3 个</option>
+                  <option value={4}>4 个</option>
+                  <option value={5}>5 个</option>
+                  <option value={6}>6 个</option>
+                </select>
+              </Field>
+              <Field label="智能体名称">
+                <input value={builderForm.agentName} onChange={(e) => updateForm('agentName', e.target.value)} />
+              </Field>
             </div>
 
-            <div className="module-list">
-              {course.modules.map((module) => (
-                <article className="module-card" key={module.id}>
-                  <div className="module-card__header">
-                    <div>
-                      <span className="eyebrow">{module.story}</span>
-                      <h3>{module.title}</h3>
-                    </div>
-                    <div className="module-meta">
-                      <span className="pill">{module.difficulty}</span>
-                      <span className="pill pill--dark">{module.badge}</span>
-                    </div>
-                  </div>
-                  <p className="module-summary">{module.summary}</p>
-                  <div className="module-columns">
-                    <InfoBlock title="关键点">
-                      <ul>
-                        {module.keyPoints.map((point) => <li key={point}>{point}</li>)}
-                      </ul>
-                    </InfoBlock>
-                    <InfoBlock title="社工任务">
-                      <ul>
-                        <li>{module.socialWorkFocus.mission}</li>
-                        <li>{module.socialWorkFocus.reflectionPrompt}</li>
-                        <li>{module.socialWorkFocus.bridgePrompt}</li>
-                      </ul>
-                    </InfoBlock>
-                    <InfoBlock title="AI 支持">
-                      <ul>
-                        <li>{module.aiCoach.diagnosis}</li>
-                        <li>{module.aiCoach.hint}</li>
-                        <li>{module.aiCoach.nextStep}</li>
-                      </ul>
-                    </InfoBlock>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </>
-        )}
-      </section>
-
-      <section className="panel-grid panel-grid--student">
-        <div className="card card--sticky">
-          <div className="card__header">
-            <div>
-              <h2>四、学生实验入口</h2>
-              <p>输入被试编号后，系统会自动完成随机分组并加载对应界面。</p>
-            </div>
+            <button className="button" onClick={handleGenerateCourse} disabled={loading}>
+              {loading ? '正在解析并生成……' : '生成自学工具'}
+            </button>
           </div>
+        </aside>
 
-          <Field label="被试编号">
-            <input value={participantId} onChange={(e) => setParticipantId(e.target.value)} placeholder="例如：S001" />
-          </Field>
-
-          <div className="button-row">
-            <button className="button" onClick={handleEnterStudy} disabled={!course}>进入实验</button>
-            <button className="button button--ghost" onClick={handleRestartParticipant} disabled={!studentSession}>重置该被试</button>
-          </div>
-
-          {course && (
-            <InfoBlock title="随机分组说明">
-              <ul>
-                <li>研究标题：{course.experiment.studyTitle}</li>
-                <li>随机单位：{course.experiment.randomizationUnit}</li>
-                <li>随机种子：{course.experiment.seed}</li>
-                <li>主要结局：{course.experiment.primaryOutcome}</li>
-              </ul>
-            </InfoBlock>
-          )}
-
-          {studentSession && (
-            <div className="session-card">
-              <h3>{studentSession.participantId}</h3>
-              <p>当前组别：{studentSession.arm.name}</p>
-              <div className="metric-grid metric-grid--compact">
-                <MetricCard label="经验值" value={studentSession.xp} description="仅游戏化组累计" />
-                <MetricCard label="等级" value={`Lv.${studentSession.level}`} description="随经验值提升" />
-                <MetricCard label="进度" value={`${Math.round(completionRatio * 100)}%`} description="按测验完成度计算" />
-              </div>
-              <div className="tag-list">
-                {studentSession.badges.length > 0 ? studentSession.badges.map((badge) => <span key={badge} className="tag">{badge}</span>) : <span className="muted">尚未解锁徽章</span>}
+        <main className="workspace__main">
+          <section className="card">
+            <div className="card__header">
+              <div>
+                <h2>二、自动生成结果</h2>
+                <p>这里展示上传课件后自动形成的课程地图、社工逻辑与 AI 陪学能力。</p>
               </div>
             </div>
-          )}
-        </div>
 
-        <div className="card">
-          <div className="card__header">
-            <div>
-              <h2>五、学生学习界面</h2>
-              <p>不同实验组会看到不同强度的游戏化与 AI 支持，但都保留统一测验便于比较。</p>
-            </div>
-          </div>
-
-          {!course ? (
-            <EmptyState title="请先生成课程" description="生成课程后，这里会显示学生实际看到的学习页面。" />
-          ) : !studentSession ? (
-            <EmptyState title="尚未进入实验" description="输入被试编号并点击“进入实验”，即可查看随机分组后的界面。" />
-          ) : !studentSession.pretest ? (
-            <SurveyForm title="前测问卷" fields={PRETEST_FIELDS} onSubmit={handlePretestSubmit} submitLabel="保存前测并开始学习" />
-          ) : studentSession.finished && !studentSession.posttest ? (
-            <SurveyForm title="后测问卷" fields={POSTTEST_FIELDS} onSubmit={handlePosttestSubmit} submitLabel="保存后测" />
-          ) : studentSession.finished && studentSession.posttest ? (
-            <CompletionCard session={studentSession} course={course} />
-          ) : (
-            currentModule && (
-              <div className={`student-stage ${studentSession.arm.gamified ? 'student-stage--gamified' : 'student-stage--plain'}`}>
-                <div className="student-stage__top">
+            {!course ? (
+              <EmptyState
+                title="还没有生成课程"
+                description="先上传课件，或者点击“载入示例”体验已经生成好的自学版本。"
+              />
+            ) : (
+              <>
+                <div className="summary-header">
                   <div>
-                    <span className="eyebrow">第 {studentSession.currentIndex + 1} 关 ／ 共 {course.modules.length} 关</span>
-                    <h3>{currentModule.title}</h3>
-                    <p>{currentModule.summary}</p>
+                    <h3>{course.title}</h3>
+                    <p>{course.description}</p>
                   </div>
-                  <div className="progress-card">
-                    <div className="progress-bar">
-                      <span style={{ width: `${Math.max(6, completionRatio * 100)}%` }} />
+                  <span className="pill">{course.subtitle}</span>
+                </div>
+
+                <div className="stat-grid">
+                  <StatCard label="关卡数" value={course.modules.length} description="自动从课件中拆解出的学习单元" />
+                  <StatCard label="预计时长" value={`${course.estimatedMinutes} 分钟`} description="按文本长度估算的自学时长" />
+                  <StatCard label="关键词" value={course.keywords.length} description="智能体用于问答与提示的概念抓手" />
+                  <StatCard label="智能体" value={course.agentProfile.name} description="学生可边学边问的陪练伙伴" />
+                </div>
+
+                <div className="info-grid">
+                  <InfoBlock title="社工理论融合">
+                    <p>{course.theoryBridge.socialWork}</p>
+                  </InfoBlock>
+                  <InfoBlock title="AI 陪学机制">
+                    <p>{course.theoryBridge.ai}</p>
+                  </InfoBlock>
+                  <InfoBlock title="游戏化结构">
+                    <p>{course.theoryBridge.pedagogy}</p>
+                  </InfoBlock>
+                </div>
+
+                <div className="info-grid info-grid--two">
+                  <InfoBlock title="学习目标">
+                    <ul>
+                      {course.learningObjectives.map((item) => <li key={item}>{item}</li>)}
+                    </ul>
+                  </InfoBlock>
+                  <InfoBlock title="课程关键词">
+                    <div className="tag-list">
+                      {course.keywords.slice(0, 10).map((item) => <span className="tag" key={item}>{item}</span>)}
                     </div>
-                    <p>完成进度：{Math.round(completionRatio * 100)}%</p>
+                  </InfoBlock>
+                </div>
+
+                <InfoBlock title="课件来源">
+                  <div className="file-list file-list--compact">
+                    {course.sourceFiles.map((file) => (
+                      <div className="file-chip" key={`${file.name}-${file.size}`}>
+                        <span>{file.name}</span>
+                        <span className="muted">{file.extension || file.type || '未知格式'}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {course.warnings.length > 0 && (
+                    <div className="warning-list">
+                      {course.warnings.map((item) => <p key={item}>提示：{item}</p>)}
+                    </div>
+                  )}
+                </InfoBlock>
+              </>
+            )}
+          </section>
+
+          <section className="card">
+            <div className="card__header">
+              <div>
+                <h2>三、学生自学界面</h2>
+                <p>学生只需输入昵称，即可进入由智能体带领的闯关式学习旅程。</p>
+              </div>
+              {session && (
+                <button className="button button--ghost" onClick={handleRestartJourney}>重新开始旅程</button>
+              )}
+            </div>
+
+            {!course ? (
+              <EmptyState title="请先生成课程" description="生成课程后，这里会变成学生实际使用的自学界面。" />
+            ) : !session ? (
+              <div className="start-panel">
+                <div className="start-panel__intro">
+                  <span className="eyebrow">开始自学</span>
+                  <h3>输入学习者昵称，进入 AI 陪练闯关模式</h3>
+                  <p>
+                    开始后，学生会获得一条线性关卡地图。每一关都包含：阅读抓手、统一挑战题、情境迁移任务，以及可随时提问的智能体。
+                  </p>
+                </div>
+                <div className="start-panel__form">
+                  <Field label="学习者昵称">
+                    <input
+                      value={learnerName}
+                      onChange={(e) => setLearnerName(e.target.value)}
+                      placeholder="例如：小林 / 2026社工1班 / 学习者A"
+                    />
+                  </Field>
+                  <button className="button" onClick={handleStartJourney}>开始闯关</button>
+                </div>
+              </div>
+            ) : (
+              <div className="study-space">
+                <div className="learner-strip">
+                  <div>
+                    <span className="eyebrow">学习中</span>
+                    <h3>{session.learnerName} 的闯关地图</h3>
+                    <p>已完成 {session.clearedModules.length} / {course.modules.length} 关。完成每关后会解锁下一关与成就徽章。</p>
+                  </div>
+                  <div className="stat-grid stat-grid--compact">
+                    <StatCard label="等级" value={`Lv.${session.level}`} description="随经验值提升" />
+                    <StatCard label="经验值" value={session.xp} description="来自答题、反思与通关" />
+                    <StatCard label="进度" value={`${progressPercent}%`} description="按已通关关卡计算" />
                   </div>
                 </div>
 
-                {studentSession.arm.gamified && (
-                  <div className="callout callout--accent">
-                    <strong>{currentModule.story}</strong>
-                    <p>{currentModule.challenge}</p>
+                <div className="progress-bar-wrap">
+                  <div className="progress-bar">
+                    <span style={{ width: `${Math.max(6, progressPercent)}%` }} />
+                  </div>
+                  <p className="muted">主线进度：{progressPercent}%</p>
+                </div>
+
+                <div className="module-path">
+                  {course.worldMap.map((node, index) => {
+                    const unlocked = index <= session.clearedModules.length
+                    const active = index === session.currentModuleIndex
+                    const cleared = session.clearedModules.includes(node.id)
+                    return (
+                      <button
+                        key={node.id}
+                        className={`module-node ${active ? 'module-node--active' : ''} ${cleared ? 'module-node--cleared' : ''}`}
+                        disabled={!unlocked}
+                        onClick={() => handleSelectModule(index)}
+                      >
+                        <span className="module-node__order">{node.label}</span>
+                        <strong>{node.title}</strong>
+                        <span className="module-node__meta">{cleared ? '已通关' : unlocked ? node.difficulty : '未解锁'}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {currentModule && (
+                  <div className="stage-panel">
+                    <div className="stage-hero">
+                      <div>
+                        <span className="eyebrow">{currentModule.story}</span>
+                        <h3>{currentModule.title}</h3>
+                        <p>{currentModule.summary}</p>
+                      </div>
+                      <div className="stage-hero__meta">
+                        <span className="pill">预计 {currentModule.readingEstimateMinutes} 分钟</span>
+                        <span className="pill">{currentModule.difficulty}</span>
+                        <span className="pill pill--dark">{currentModule.badge}</span>
+                      </div>
+                    </div>
+
+                    <div className="callout callout--accent">
+                      <strong>本关任务提示</strong>
+                      <p>{currentModule.challenge}</p>
+                      <p className="muted">{currentModule.scene}</p>
+                    </div>
+
+                    <div className="quest-list">
+                      <QuestItem title={currentModule.missions[0].title} detail={currentModule.missions[0].detail} done />
+                      <QuestItem title={currentModule.missions[1].title} detail={currentModule.missions[1].detail} done={Boolean(currentAnswer)} />
+                      <QuestItem title={currentModule.missions[2].title} detail={currentModule.missions[2].detail} done={Boolean(currentReflection.trim())} />
+                    </div>
+
+                    <div className="reader-card">
+                      <div className="reader-card__head">
+                        <h4>关卡内容</h4>
+                        <div className="tag-list">
+                          {currentModule.keywords.slice(0, 4).map((item) => <span className="tag" key={item}>{item}</span>)}
+                        </div>
+                      </div>
+                      <div className="reader-card__content">
+                        {splitContent(currentModule.content).map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
+                      </div>
+                    </div>
+
+                    <div className="info-grid info-grid--two">
+                      <InfoBlock title="本关抓手">
+                        <ul>
+                          {currentModule.keyPoints.map((item) => <li key={item}>{item}</li>)}
+                        </ul>
+                      </InfoBlock>
+                      <InfoBlock title="社工迁移提示">
+                        <ul>
+                          <li>{currentModule.socialWorkFocus.mission}</li>
+                          <li>{currentModule.socialWorkFocus.reflectionPrompt}</li>
+                          <li>{currentModule.socialWorkFocus.bridgePrompt}</li>
+                        </ul>
+                      </InfoBlock>
+                    </div>
+
+                    <QuizPanel
+                      key={currentModule.id}
+                      module={currentModule}
+                      answer={currentAnswer}
+                      onSubmit={handleQuizSubmit}
+                    />
+
+                    <ReflectionComposer
+                      key={currentModule.id}
+                      module={currentModule}
+                      savedText={currentReflection}
+                      onSave={handleReflectionSave}
+                    />
+
+                    <div className="button-row button-row--spread">
+                      <div className="tag-list">
+                        {session.badges.length > 0 ? session.badges.map((badge) => <span className="tag" key={badge}>{badge}</span>) : <span className="muted">完成关卡后可解锁徽章</span>}
+                      </div>
+                      <button className="button" onClick={() => handleCompleteModule(currentModule)} disabled={!readyToClearCurrent}>
+                        完成本关并解锁下一关
+                      </button>
+                    </div>
                   </div>
                 )}
 
-                <div className="module-reader">
-                  <div className="module-reader__meta">
-                    <span className="pill">预计 {currentModule.readingEstimateMinutes} 分钟</span>
-                    <span className="pill">难度：{currentModule.difficulty}</span>
-                    <span className="pill">社工透镜：{currentModule.socialWorkFocus.theory}</span>
-                  </div>
-                  <div className="module-content">
-                    {splitContent(currentModule.content).map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
-                  </div>
-                </div>
-
-                <div className="module-columns module-columns--student">
-                  <InfoBlock title="关键点">
-                    <ul>
-                      {currentModule.keyPoints.map((item) => <li key={item}>{item}</li>)}
-                    </ul>
-                  </InfoBlock>
-                  <InfoBlock title="社工反思任务">
-                    <ul>
-                      <li>{currentModule.socialWorkFocus.mission}</li>
-                      <li>{currentModule.socialWorkFocus.reflectionPrompt}</li>
-                    </ul>
-                  </InfoBlock>
-                </div>
-
-                <QuizPanel key={currentModule.id} module={currentModule} answer={currentAnswer} onSubmit={handleQuizSubmit} />
-
-                <InfoBlock title={studentSession.arm.aiCoach ? 'AI 导师反馈' : '学习提示'}>
-                  <p>{aiCoachMessage}</p>
-                  <p className="muted">{currentModule.quiz.stretchTask}</p>
-                </InfoBlock>
-
-                {(studentSession.arm.socialWork || studentSession.arm.gamified) && (
-                  <ReflectionPanel
-                    key={currentModule.id}
-                    module={currentModule}
-                    savedText={studentSession.reflections[currentModule.id] || ''}
-                    onSave={handleReflectionSave}
+                {allModulesCleared && (
+                  <FinalBossComposer
+                    key={course.id}
+                    title={course.finalBoss.title}
+                    prompt={course.finalBoss.prompt}
+                    rubric={course.finalBoss.rubric}
+                    savedText={session.finalReflection}
+                    completed={session.finalBossDone}
+                    onSave={handleSaveFinalReflection}
                   />
                 )}
-
-                <div className="button-row button-row--spread">
-                  <button className="button button--ghost" onClick={() => moveModule(-1)} disabled={studentSession.currentIndex === 0}>上一关</button>
-                  {studentSession.currentIndex < course.modules.length - 1 ? (
-                    <button className="button" onClick={() => moveModule(1)}>下一关</button>
-                  ) : (
-                    <button className="button" onClick={handleFinishStudy}>完成全部学习</button>
-                  )}
-                </div>
               </div>
-            )
-          )}
-        </div>
-      </section>
+            )}
+          </section>
+        </main>
 
-      <section className="card">
-        <div className="card__header">
-          <div>
-            <h2>六、随机对照实验仪表板</h2>
-            <p>支持导出日志，便于后续做描述统计、t 检验、回归或混合模型分析。</p>
-          </div>
-          <div className="button-row">
-            <button className="button button--secondary" onClick={handleExportJson}>导出 JSON</button>
-            <button className="button button--secondary" onClick={handleExportCsv}>导出 CSV</button>
-          </div>
-        </div>
-
-        {!course ? (
-          <EmptyState title="暂无实验设计" description="生成课程后，这里会显示实验假设、过程和实时数据。" />
-        ) : (
-          <>
-            <div className="metric-grid">
-              <MetricCard label="总被试数" value={stats.totalParticipants} description="按日志中的唯一被试编号统计" />
-              <MetricCard label="总日志数" value={stats.totalLogs} description="包含进入实验、答题、反思、完成等事件" />
-              <MetricCard label="主要结局" value={course.experiment.primaryOutcome} description="用于检验核心效果" />
-              <MetricCard label="伦理提醒" value="已内置" description="正式实验前仍需补充知情同意与匿名化方案" />
+        <aside className="workspace__agent">
+          <div className="card card--sticky card--chat">
+            <div className="card__header">
+              <div>
+                <h2>四、智能体陪练</h2>
+                <p>学生可以随时提问，让智能体解释、举例、提示、出题与复盘。</p>
+              </div>
             </div>
 
-            <div className="info-grid">
-              <InfoBlock title="研究假设">
-                <ul>
-                  {course.experiment.hypotheses.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </InfoBlock>
-              <InfoBlock title="建议测量指标">
-                <ul>
-                  {course.experiment.suggestedMeasures.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-              </InfoBlock>
-              <InfoBlock title="实施步骤">
-                <ul>
-                  {course.experiment.procedure.map((item) => <li key={item}>{item}</li>)}
-                </ul>
-                <p className="muted">{course.experiment.ethicsNotice}</p>
-              </InfoBlock>
-            </div>
-
-            <div className="arm-grid">
-              {stats.armSummaries.map((arm) => (
-                <div className="arm-card" key={arm.armId}>
-                  <div className="arm-card__title">
-                    <h3>{arm.armName}</h3>
-                    <span className="pill">{arm.armId}</span>
+            {!course ? (
+              <EmptyState title="等待课件生成" description="先生成课程后，这里会出现可互动的智能体陪练窗口。" compact />
+            ) : !session ? (
+              <EmptyState title="等待学习者进入" description={`课程已准备好。学生开始旅程后，就能和 ${course.agentProfile.name} 互动。`} compact />
+            ) : (
+              <>
+                <div className="agent-meta">
+                  <div>
+                    <span className="eyebrow">{course.agentProfile.role}</span>
+                    <h3>{course.agentProfile.name}</h3>
+                    <p>{course.agentProfile.opening}</p>
                   </div>
-                  <ul>
-                    <li>被试数：{arm.participants}</li>
-                    <li>完成率：{arm.completionRate}</li>
-                    <li>测验正确率：{arm.accuracy}</li>
-                    <li>反思提交数：{arm.reflectionCount}</li>
-                  </ul>
+                  <div className="pill">当前关卡：{currentModule?.title}</div>
                 </div>
-              ))}
-            </div>
 
-            <InfoBlock title="被试记录概览">
-              {stats.participantRows.length === 0 ? (
-                <p className="muted">还没有被试数据。</p>
-              ) : (
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>被试编号</th>
-                        <th>组别</th>
-                        <th>正确率</th>
-                        <th>测验数</th>
-                        <th>反思数</th>
-                        <th>开始时间</th>
-                        <th>完成时间</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {stats.participantRows.slice(0, 12).map((row) => (
-                        <tr key={row.participantId}>
-                          <td>{row.participantId}</td>
-                          <td>{row.armId}</td>
-                          <td>{row.accuracy}</td>
-                          <td>{row.quizCount}</td>
-                          <td>{row.reflectionCount}</td>
-                          <td>{formatDateTime(row.enteredAt)}</td>
-                          <td>{row.finishedAt ? formatDateTime(row.finishedAt) : '—'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="quick-actions">
+                  {quickPrompts.map((prompt) => (
+                    <button key={prompt} className="quick-action" onClick={() => handleSendChat(prompt)}>{prompt}</button>
+                  ))}
                 </div>
-              )}
-            </InfoBlock>
-          </>
-        )}
+
+                <div className="chat-history">
+                  {session.chatHistory.map((item) => (
+                    <article key={item.id} className={`chat-bubble chat-bubble--${item.role}`}>
+                      <span className="chat-bubble__role">{item.role === 'agent' ? course.agentProfile.name : session.learnerName}</span>
+                      <p>{item.content}</p>
+                    </article>
+                  ))}
+                </div>
+
+                <div className="chat-composer">
+                  <textarea
+                    rows={4}
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="例如：解释一下这一关 / 给我举个例子 / 我的理解是……"
+                  />
+                  <div className="button-row button-row--spread">
+                    <p className="muted">提示：如果你输入“我的理解是……”，智能体会给你反馈。</p>
+                    <button className="button button--secondary" onClick={() => handleSendChat()}>发送</button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </aside>
       </section>
     </div>
   )
@@ -899,6 +798,16 @@ function Field({ label, children }) {
   )
 }
 
+function StatCard({ label, value, description }) {
+  return (
+    <div className="stat-card">
+      <span className="stat-card__label">{label}</span>
+      <strong>{value}</strong>
+      <p>{description}</p>
+    </div>
+  )
+}
+
 function InfoBlock({ title, children }) {
   return (
     <section className="info-block">
@@ -908,65 +817,24 @@ function InfoBlock({ title, children }) {
   )
 }
 
-function MetricCard({ label, value, description }) {
+function EmptyState({ title, description, compact = false }) {
   return (
-    <div className="metric-card">
-      <span className="metric-card__label">{label}</span>
-      <strong>{value}</strong>
-      <p>{description}</p>
-    </div>
-  )
-}
-
-function EmptyState({ title, description }) {
-  return (
-    <div className="empty-state">
+    <div className={`empty-state ${compact ? 'empty-state--compact' : ''}`}>
       <h3>{title}</h3>
       <p>{description}</p>
     </div>
   )
 }
 
-function SurveyForm({ title, fields, onSubmit, submitLabel }) {
-  const [values, setValues] = useState(() => createSurveyDefaults(fields))
-
-  function updateValue(name, value) {
-    setValues((prev) => ({ ...prev, [name]: value }))
-  }
-
+function QuestItem({ title, detail, done = false }) {
   return (
-    <form
-      className="survey-form"
-      onSubmit={(event) => {
-        event.preventDefault()
-        onSubmit(values)
-      }}
-    >
-      <div className="card__header">
-        <div>
-          <h3>{title}</h3>
-          <p>请先完成问卷，再继续下一步。</p>
-        </div>
+    <div className={`quest-item ${done ? 'quest-item--done' : ''}`}>
+      <span className="quest-item__status">{done ? '✓' : '○'}</span>
+      <div>
+        <strong>{title}</strong>
+        <p>{detail}</p>
       </div>
-      <div className="form-grid">
-        {fields.map((field) => (
-          <Field key={field.name} label={field.label}>
-            {field.type === 'scale' ? (
-              <select value={values[field.name]} onChange={(e) => updateValue(field.name, Number(e.target.value))}>
-                <option value={1}>1 分</option>
-                <option value={2}>2 分</option>
-                <option value={3}>3 分</option>
-                <option value={4}>4 分</option>
-                <option value={5}>5 分</option>
-              </select>
-            ) : (
-              <textarea value={values[field.name]} onChange={(e) => updateValue(field.name, e.target.value)} rows={4} />
-            )}
-          </Field>
-        ))}
-      </div>
-      <button className="button" type="submit">{submitLabel}</button>
-    </form>
+    </div>
   )
 }
 
@@ -974,11 +842,15 @@ function QuizPanel({ module, answer, onSubmit }) {
   const [selectedIndex, setSelectedIndex] = useState(answer?.selectedIndex ?? -1)
 
   return (
-    <section className="quiz-panel">
-      <div className="quiz-panel__head">
-        <h3>统一测验</h3>
-        <p>{module.quiz.question}</p>
+    <section className="interactive-card">
+      <div className="interactive-card__head">
+        <div>
+          <h3>统一挑战题</h3>
+          <p>{module.quiz.question}</p>
+        </div>
+        <span className="pill">任务 2</span>
       </div>
+
       <div className="quiz-options">
         {module.quiz.options.map((option, index) => (
           <label key={option} className={`quiz-option ${answer?.selectedIndex === index ? 'quiz-option--selected' : ''}`}>
@@ -993,13 +865,14 @@ function QuizPanel({ module, answer, onSubmit }) {
           </label>
         ))}
       </div>
-      <div className="button-row">
-        <button className="button" onClick={() => onSubmit(module, selectedIndex)} disabled={selectedIndex < 0 || Boolean(answer)}>
+
+      <div className="button-row button-row--spread">
+        <button className="button button--secondary" onClick={() => onSubmit(module, selectedIndex)} disabled={Boolean(answer) || selectedIndex < 0}>
           {answer ? '已提交' : '提交答案'}
         </button>
         {answer && (
           <p className={answer.isCorrect ? 'result-text result-text--success' : 'result-text result-text--error'}>
-            {answer.isCorrect ? '回答正确。' : '回答未命中。'} {module.quiz.rationale}
+            {answer.isCorrect ? '回答正确。' : '回答未命中。'} {module.quiz.stretchTask}
           </p>
         )}
       </div>
@@ -1007,76 +880,76 @@ function QuizPanel({ module, answer, onSubmit }) {
   )
 }
 
-function ReflectionPanel({ module, savedText, onSave }) {
+function ReflectionComposer({ module, savedText, onSave }) {
   const [text, setText] = useState(savedText)
 
   return (
-    <section className="reflection-panel">
-      <div className="card__header">
+    <section className="interactive-card">
+      <div className="interactive-card__head">
         <div>
-          <h3>社工反思记录</h3>
+          <h3>应用迁移任务</h3>
           <p>{module.socialWorkFocus.bridgePrompt}</p>
         </div>
+        <span className="pill">任务 3</span>
       </div>
+
       <textarea
         rows={5}
         value={text}
-        placeholder="请写下你的情境分析、资源发现或赋能思考。"
+        placeholder="请把这一关知识带回真实场景，写下对象、情境和你的行动思路。"
         onChange={(e) => setText(e.target.value)}
       />
-      <div className="button-row">
+
+      <div className="button-row button-row--spread">
         <button className="button button--secondary" onClick={() => onSave(module, text)}>保存反思</button>
-        {savedText && <span className="muted">已保存，后续仍可修改。</span>}
+        {savedText && <span className="muted">已保存，可继续修改。</span>}
       </div>
     </section>
   )
 }
 
-function CompletionCard({ session, course }) {
+function FinalBossComposer({ title, prompt, rubric, savedText, completed, onSave }) {
+  const [text, setText] = useState(savedText)
+
   return (
-    <div className="completion-card">
-      <span className="eyebrow">实验完成</span>
-      <h3>恭喜完成《{course.title}》</h3>
-      <p>你的学习过程、测验结果与反思文本已经记录在本地日志中，可由教师统一导出。</p>
-      <div className="metric-grid">
-        <MetricCard label="被试编号" value={session.participantId} description="用于实验分组与日志匹配" />
-        <MetricCard label="组别" value={session.arm.name} description="由随机种子自动分配" />
-        <MetricCard label="等级" value={`Lv.${session.level}`} description="仅游戏化组累计经验值" />
-        <MetricCard label="正确率" value={calculateAccuracy(session.answers)} description="基于全部统一测验" />
+    <section className="final-boss">
+      <div className="interactive-card__head">
+        <div>
+          <span className="eyebrow">终局任务</span>
+          <h3>{title}</h3>
+          <p>{prompt}</p>
+        </div>
+        {completed && <span className="pill pill--dark">已完成</span>}
       </div>
-      <div className="tag-list">
-        {session.badges.length > 0 ? session.badges.map((badge) => <span key={badge} className="tag">{badge}</span>) : <span className="muted">本组不展示游戏化徽章。</span>}
+
+      <div className="info-grid info-grid--two">
+        <InfoBlock title="评分抓手">
+          <ul>
+            {rubric.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </InfoBlock>
+        <InfoBlock title="建议写法">
+          <ul>
+            <li>先点出你最关键的两个核心概念。</li>
+            <li>再说明你面对的是谁、处在什么情境。</li>
+            <li>最后写出具体可执行的行动步骤。</li>
+          </ul>
+        </InfoBlock>
       </div>
-    </div>
+
+      <textarea
+        rows={6}
+        value={text}
+        placeholder="请把整门课整合成一个可落地的小方案。"
+        onChange={(e) => setText(e.target.value)}
+      />
+
+      <div className="button-row button-row--spread">
+        <button className="button" onClick={() => onSave(text)}>{completed ? '更新终局方案' : '提交终局方案'}</button>
+        {completed && <span className="muted">已解锁“终局设计师”徽章。</span>}
+      </div>
+    </section>
   )
-}
-
-function createSurveyDefaults(fields) {
-  return fields.reduce((accumulator, field) => {
-    accumulator[field.name] = field.type === 'scale' ? 3 : ''
-    return accumulator
-  }, {})
-}
-
-function buildCoachMessage(module, session) {
-  const answer = session.answers[module.id]
-  const reflection = session.reflections[module.id]
-
-  if (session.arm.aiCoach) {
-    if (!answer) {
-      return `${module.aiCoach.diagnosis}${module.aiCoach.hint}`
-    }
-    if (answer.isCorrect) {
-      return `AI 导师判断你已经抓住本节重点。${module.aiCoach.nextStep}${reflection ? ' 你的社工反思也已保存，说明你已经开始把知识迁移到情境中。' : ' 建议再补写一段社工反思，巩固迁移效果。'}`
-    }
-    return `AI 导师建议你回看“${module.keyPoints[0]}”，并围绕 ${module.socialWorkFocus.theory} 思考：这个知识点在真实课堂、社区或服务情境中如何使用？`
-  }
-
-  if (session.arm.socialWork) {
-    return `学习提示：请完成统一测验后，再用 ${module.socialWorkFocus.theory} 重新解释本节内容，把抽象知识转化为情境化语言。`
-  }
-
-  return '学习提示：请按顺序阅读、答题并完成后测，系统将用于比较不同教学设计的学习效果。'
 }
 
 function splitContent(content) {
@@ -1086,32 +959,10 @@ function splitContent(content) {
     .filter(Boolean)
 }
 
-function calculateAccuracy(answerMap) {
-  const values = Object.values(answerMap || {})
-  if (values.length === 0) {
-    return 0
-  }
-  const correct = values.filter((item) => item.isCorrect).length
-  return Number((correct / values.length).toFixed(2))
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value))
-}
-
 function formatFileSize(size) {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
-}
-
-function formatDateTime(value) {
-  if (!value) return '—'
-  return new Date(value).toLocaleString('zh-CN', { hour12: false })
-}
-
-function formatDateStamp() {
-  return new Date().toISOString().slice(0, 10)
 }
 
 export default App
