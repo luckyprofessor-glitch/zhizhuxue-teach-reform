@@ -7,9 +7,12 @@ import {
   SOCIAL_WORK_LENSES,
 } from './utils/gamification.js'
 import {
+  COACH_MODES,
+  buildLearningDiagnosis,
   createChatMessage,
   createCompletionMessage,
   createFinalBossFeedback,
+  createModeSwitchMessage,
   createModuleArrivalMessage,
   createOpeningMessages,
   createQuizFeedback,
@@ -124,7 +127,9 @@ function App() {
     session &&
     !session.clearedModules.includes(currentModule.id),
   )
-  const quickPrompts = currentModule ? getQuickPrompts(currentModule) : []
+  const currentCoachMode = session?.coachMode || '启发式'
+  const learningDiagnosis = currentModule && session ? buildLearningDiagnosis(currentModule, session) : null
+  const quickPrompts = currentModule ? getQuickPrompts(currentModule, currentCoachMode) : []
   const generationLabel = course?.runtime?.generator === 'llm' ? '真实大模型优化' : '本地生成'
 
   function updateForm(name, value) {
@@ -272,6 +277,19 @@ function App() {
     setSession(null)
     setChatInput('')
     setNotice('已重置当前学习旅程。你可以重新开始闯关。')
+  }
+
+  function handleCoachModeChange(modeId) {
+    if (!session || currentCoachMode === modeId) {
+      return
+    }
+
+    setSession((prev) => ({
+      ...prev,
+      coachMode: modeId,
+      chatHistory: [...prev.chatHistory, createModeSwitchMessage(modeId)],
+    }))
+    setNotice(`已切换到${modeId}。`)
   }
 
   function handleSelectModule(index) {
@@ -475,6 +493,7 @@ function App() {
           module: currentModule,
           session: sessionSnapshot,
           message,
+          coachMode: currentCoachMode,
         })
         replyMessage = createChatMessage('agent', content)
       } else {
@@ -483,6 +502,7 @@ function App() {
           module: currentModule,
           session: sessionSnapshot,
           message,
+          coachMode: currentCoachMode,
         })
       }
     } catch (chatError) {
@@ -491,6 +511,7 @@ function App() {
         module: currentModule,
         session: sessionSnapshot,
         message,
+        coachMode: currentCoachMode,
       })
       fallbackNotice = `真实大模型对话失败，已自动切回本地陪练。原因：${chatError.message}`
     }
@@ -807,6 +828,20 @@ function App() {
                   <p className="muted">主线进度：{progressPercent}%</p>
                 </div>
 
+                {learningDiagnosis && (
+                  <div className="diagnosis-card">
+                    <div>
+                      <span className="eyebrow">学习诊断</span>
+                      <h4>{learningDiagnosis.phase}</h4>
+                      <p>{learningDiagnosis.status}</p>
+                    </div>
+                    <div className="diagnosis-card__body">
+                      <p><strong>下一步：</strong>{learningDiagnosis.nextStep}</p>
+                      <p><strong>当前抓手：</strong>{learningDiagnosis.focus}</p>
+                    </div>
+                  </div>
+                )}
+
                 <div className="module-path">
                   {course.worldMap.map((node, index) => {
                     const unlocked = index <= session.clearedModules.length
@@ -943,6 +978,43 @@ function App() {
                   </div>
                   <div className="pill">当前关卡：{currentModule?.title}</div>
                 </div>
+
+                <section className="coach-panel">
+                  <div className="coach-panel__head">
+                    <div>
+                      <h3>陪练模式</h3>
+                      <p>切换后，智能体会改变回应风格。</p>
+                    </div>
+                    <span className="status-pill status-pill--muted">当前：{currentCoachMode}</span>
+                  </div>
+                  <div className="mode-grid">
+                    {Object.values(COACH_MODES).map((mode) => (
+                      <button
+                        key={mode.id}
+                        className={`mode-chip ${currentCoachMode === mode.id ? 'mode-chip--active' : ''}`}
+                        onClick={() => handleCoachModeChange(mode.id)}
+                        disabled={chatLoading}
+                      >
+                        <strong>{mode.label}</strong>
+                        <span>{mode.description}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="coach-panel">
+                  <div className="coach-panel__head">
+                    <div>
+                      <h3>分层提示</h3>
+                      <p>从轻提示到关键提示，逐级打开思路。</p>
+                    </div>
+                  </div>
+                  <div className="quick-actions quick-actions--stacked">
+                    <button className="quick-action" disabled={chatLoading} onClick={() => handleSendChat('给我一个轻提示')}>轻提示</button>
+                    <button className="quick-action" disabled={chatLoading} onClick={() => handleSendChat('给我一个中提示')}>中提示</button>
+                    <button className="quick-action" disabled={chatLoading} onClick={() => handleSendChat('给我一个关键提示')}>关键提示</button>
+                  </div>
+                </section>
 
                 <div className="quick-actions">
                   {quickPrompts.map((prompt) => (

@@ -43,6 +43,7 @@ export function createStudySession(course, learnerName) {
     courseId: course.id,
     learnerName,
     currentModuleIndex: 0,
+    coachMode: '启发式',
     answers: {},
     reflections: {},
     clearedModules: [],

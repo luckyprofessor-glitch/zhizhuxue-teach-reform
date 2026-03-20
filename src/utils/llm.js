@@ -180,7 +180,7 @@ ${moduleBlueprint}
   return mergeCourseFromAI(baseCourse, parsed)
 }
 
-export async function getTutorReplyWithAI({ aiConfig, course, module, session, message }) {
+export async function getTutorReplyWithAI({ aiConfig, course, module, session, message, coachMode = '启发式' }) {
   const history = (session?.chatHistory || [])
     .slice(-8)
     .map((item) => ({
@@ -192,10 +192,11 @@ export async function getTutorReplyWithAI({ aiConfig, course, module, session, m
 你的职责：
 1. 围绕当前关卡内容进行解释、举例、提示、提问、总结与纠错。
 2. 语气鼓励、具体、像陪练，不要空泛说教。
-3. 默认优先引导学生思考，不是一上来直接给标准答案；但如果学生明确要求，也可以给清晰答案。
-4. 要体现 ${module.socialWorkFocus.theory} 的视角，把知识和真实情境、资源、支持、行动联系起来。
-5. 只根据给定课程与关卡上下文回答；如果超出上下文，要诚实说明并给出学习建议。
-6. 回复用简体中文，尽量控制在 120-220 字，除非学生明确要求详细展开。`
+3. 要体现 ${module.socialWorkFocus.theory} 的视角，把知识和真实情境、资源、支持、行动联系起来。
+4. 只根据给定课程与关卡上下文回答；如果超出上下文，要诚实说明并给出学习建议。
+5. 回复用简体中文，尽量控制在 120-220 字，除非学生明确要求详细展开。
+6. 当前陪练模式：${coachMode}。
+${getCoachModeInstruction(coachMode)}`
 
   const contextPrompt = `【课程】${course.title}
 【课程描述】${course.description}
@@ -208,6 +209,7 @@ export async function getTutorReplyWithAI({ aiConfig, course, module, session, m
 【社工任务】${module.socialWorkFocus.bridgePrompt}
 【学生当前进度】已完成 ${session?.clearedModules?.length || 0}/${course.modules.length} 关
 【已提交测验】${session?.answers?.[module.id] ? '是' : '否'}
+【测验是否正确】${session?.answers?.[module.id]?.isCorrect ? '是' : '否'}
 【已写应用反思】${session?.reflections?.[module.id]?.trim() ? '是' : '否'}`
 
   return requestChatCompletion(aiConfig, {
@@ -253,6 +255,19 @@ async function requestChatCompletion(aiConfig, { messages, temperature = 0.7, ma
   }
 
   return normalizeText(content)
+}
+
+function getCoachModeInstruction(mode) {
+  if (mode === '讲解式') {
+    return '当学生提问时，优先给清晰结构化解释，可分点说明，但仍要结合当前关卡与真实情境。'
+  }
+  if (mode === '挑战式') {
+    return '优先把知识转成挑战、任务、限时问答或闯关要求，少讲大道理，多给任务感。'
+  }
+  if (mode === '复盘式') {
+    return '优先总结学生当前表现，指出理解盲点、下一步和纠错点，让回答更像复盘教练。'
+  }
+  return '优先采用启发式教学，先追问、再提示、后总结，帮助学生自己想出来。'
 }
 
 function buildProviderHeaders(provider) {
