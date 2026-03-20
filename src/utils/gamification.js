@@ -125,21 +125,23 @@ const STOPWORDS = new Set([
   'had',
 ])
 
-export function buildCourseFromText(text, options = {}, filesMeta = [], inheritedWarnings = []) {
+export function buildCourseFromText(text, options = {}, filesMeta = [], sourceUnits = [], inheritedWarnings = []) {
   const normalized = normalizeText(text)
-  const paragraphs = extractParagraphs(normalized)
   const targetModules = clamp(Number(options.moduleCount) || 5, 3, 6)
-  const groupedParagraphs = groupParagraphs(paragraphs, targetModules)
+  const moduleSeeds = buildModuleSeeds(normalized, sourceUnits, targetModules)
   const lens = SOCIAL_WORK_LENSES[options.socialLens] || SOCIAL_WORK_LENSES.优势视角
   const style = options.gameStyle || '闯关式'
   const fullKeywords = extractKeywords(normalized).slice(0, 12)
+  const allChunks = moduleSeeds.map((seed) => seed.text)
+  const sourceStructure = inferSourceStructure(sourceUnits)
 
-  const modules = groupedParagraphs.map((chunk, index, allChunks) => {
+  const modules = moduleSeeds.map((seed, index) => {
+    const chunk = seed.text
     const localKeywords = extractKeywords(chunk).slice(0, 5)
     const sentences = splitSentences(chunk)
     const summary = shorten(sentences.slice(0, 2).join(' '), 110) || shorten(chunk, 110)
     const keyPoints = buildKeyPoints(sentences, localKeywords)
-    const title = createModuleTitle(chunk, index, localKeywords, options)
+    const title = createModuleTitle(chunk, index, localKeywords, options, seed.shortLabel)
     const difficulty = inferDifficulty(chunk, index)
     const quiz = createQuiz({
       title,
@@ -166,13 +168,16 @@ export function buildCourseFromText(text, options = {}, filesMeta = [], inherite
       difficulty,
       badge: BADGE_POOL[index % BADGE_POOL.length],
       xp: 80,
-      story: createStoryTitle(title, index, style),
+      story: createStoryTitle(title, index, style, seed.shortLabel),
       challenge: createChallenge(title, localKeywords, lens, difficulty),
-      scene: createScene(title, sceneKeyword, lens),
+      scene: createScene(title, sceneKeyword, lens, seed.label),
+      sourceLabel: seed.label,
+      sourceKind: seed.kind,
+      sourceUnits: seed.units,
       missions: [
         {
           id: `module-${index + 1}-scan`,
-          title: '任务 1｜侦察核心概念',
+          title: sourceStructure === 'slide-based' ? '任务 1｜扫描本段幻灯片主线' : '任务 1｜侦察核心概念',
           detail: `抓住“${missionKeyword}”并用自己的话说清它是什么。`,
           reward: '+20 经验值',
         },
@@ -208,18 +213,19 @@ export function buildCourseFromText(text, options = {}, filesMeta = [], inherite
 
   const title = (options.courseTitle || '').trim() || inferCourseTitle(normalized, filesMeta, fullKeywords)
   const estimatedMinutes = modules.reduce((sum, item) => sum + item.readingEstimateMinutes, 0)
+  const structureDescription = getStructureDescription(sourceStructure, moduleSeeds)
 
   return {
     id: `course-${Date.now()}`,
     title,
     subtitle: `${options.targetLearners || '学生'}自学模式｜${style}｜${lens.name}`,
-    description: `系统已把上传课件重构为 ${modules.length} 个可互动的游戏化关卡，学生可以与智能体边学边问边闯关。`,
+    description: `系统已把上传课件重构为 ${modules.length} 个可互动的游戏化关卡，学生可以与智能体边学边问边闯关。${structureDescription}`,
     keywords: fullKeywords,
     learningObjectives: modules.slice(0, 4).map((module, index) => `目标 ${index + 1}：掌握“${module.title}”，并能结合 ${lens.name} 说清其真实应用情境。`),
     modules,
     worldMap: modules.map((module, index) => ({
       id: module.id,
-      label: `第 ${index + 1} 关`,
+      label: module.sourceLabel || `第 ${index + 1} 关`,
       title: module.title,
       badge: module.badge,
       difficulty: module.difficulty,
@@ -246,6 +252,7 @@ export function buildCourseFromText(text, options = {}, filesMeta = [], inherite
       ],
     },
     sourceFiles: filesMeta,
+    sourceStructure,
     estimatedMinutes,
     totalCharacters: normalized.length,
     generatedAt: new Date().toISOString(),
@@ -305,6 +312,113 @@ function groupParagraphs(paragraphs, target) {
   return result.slice(0, target)
 }
 
+function buildModuleSeeds(normalizedText, sourceUnits, targetModules) {
+  const normalizedUnits = normalizeSourceUnits(sourceUnits)
+  if (normalizedUnits.length > 0) {
+    return groupSourceUnits(normalizedUnits, targetModules)
+  }
+
+  const paragraphs = extractParagraphs(normalizedText)
+  return groupParagraphs(paragraphs, targetModules).map((chunk, index) => ({
+    text: chunk,
+    label: `第 ${index + 1} 关`,
+    shortLabel: `关卡 ${index + 1}`,
+    kind: 'text-block',
+    units: [],
+  }))
+}
+
+function normalizeSourceUnits(sourceUnits) {
+  return (sourceUnits || [])
+    .filter((unit) => normalizeText(unit?.text || '').length > 10)
+    .map((unit, index) => ({
+      id: unit.id || `unit-${index + 1}`,
+      title: normalizeText(unit.title || `片段 ${index + 1}`),
+      order: Number(unit.order) || index + 1,
+      kind: unit.kind || 'text-block',
+      text: normalizeText(unit.text || ''),
+    }))
+    .sort((a, b) => a.order - b.order)
+}
+
+function groupSourceUnits(units, targetModules) {
+  if (units.length === 0) {
+    return []
+  }
+
+  if (units.length <= targetModules) {
+    return units.map((unit) => ({
+      text: unit.text,
+      label: formatUnitRange([unit]),
+      shortLabel: unit.title,
+      kind: unit.kind,
+      units: [unit],
+    }))
+  }
+
+  const groups = []
+  const size = Math.ceil(units.length / targetModules)
+  for (let i = 0; i < units.length; i += size) {
+    const slice = units.slice(i, i + size)
+    groups.push({
+      text: slice.map((unit) => `${unit.title}\n${unit.text}`).join('\n\n'),
+      label: formatUnitRange(slice),
+      shortLabel: formatShortRange(slice),
+      kind: slice[0].kind,
+      units: slice,
+    })
+  }
+  return groups.slice(0, targetModules)
+}
+
+function formatUnitRange(units) {
+  if (units.length === 0) {
+    return '未命名单元'
+  }
+
+  const first = units[0]
+  const last = units[units.length - 1]
+  const prefix = getUnitPrefix(first.kind)
+
+  if (units.length === 1) {
+    return `${prefix}${first.title}`
+  }
+  return `${prefix}${first.title}—${last.title}`
+}
+
+function formatShortRange(units) {
+  if (units.length === 0) {
+    return ''
+  }
+  if (units.length === 1) {
+    return units[0].title
+  }
+  return `${units[0].title}—${units[units.length - 1].title}`
+}
+
+function getUnitPrefix(kind) {
+  if (kind === 'ppt-slide') return 'PPT '
+  if (kind === 'pdf-page') return 'PDF '
+  return ''
+}
+
+function inferSourceStructure(sourceUnits) {
+  const kinds = new Set((sourceUnits || []).map((unit) => unit.kind))
+  if (kinds.has('ppt-slide')) return 'slide-based'
+  if (kinds.has('pdf-page')) return 'page-based'
+  return 'text-based'
+}
+
+function getStructureDescription(sourceStructure, moduleSeeds) {
+  if (sourceStructure === 'slide-based') {
+    return ` 当前已按幻灯片结构重组，共识别 ${moduleSeeds.reduce((sum, seed) => sum + seed.units.length, 0)} 页内容。`
+  }
+  if (sourceStructure === 'page-based') {
+    return ` 当前已按页码结构重组，共识别 ${moduleSeeds.reduce((sum, seed) => sum + seed.units.length, 0)} 页内容。`
+  }
+  return ''
+}
+
 function splitSentences(text) {
   return (text || '')
     .split(/(?<=[。！？!?；;])|\n+/)
@@ -329,31 +443,38 @@ function extractKeywords(text) {
     .map(([token]) => token)
 }
 
-function createModuleTitle(chunk, index, localKeywords, options) {
+function createModuleTitle(chunk, index, localKeywords, options, sourceLabel = '') {
   const heading = (chunk.split('\n')[0] || '').trim()
-  if (heading && heading.length <= 24) {
+  if (heading && heading.length <= 24 && !isGenericHeading(heading)) {
     return heading
   }
+
+  if (sourceLabel) {
+    return `${sourceLabel}｜${localKeywords[0] || `核心概念${index + 1}`}`
+  }
+
   const prefix = options.gameStyle === '剧情式' ? '剧情节点' : '任务'
   return `${prefix}${index + 1}：${localKeywords[0] || `核心概念${index + 1}`}`
 }
 
-function createStoryTitle(title, index, style) {
+function createStoryTitle(title, index, style, sourceLabel = '') {
+  const labelPrefix = sourceLabel ? `${sourceLabel}｜` : `关卡 ${index + 1}｜`
   if (style === '剧情式') {
-    return `章节 ${index + 1}｜你需要在情境推进中破解“${title}”`
+    return `${labelPrefix}你需要在情境推进中破解“${title}”`
   }
   if (style === '积分徽章式') {
-    return `关卡 ${index + 1}｜累计积分，点亮“${title}”徽章`
+    return `${labelPrefix}累计积分，点亮“${title}”徽章`
   }
-  return `关卡 ${index + 1}｜完成“${title}”三段式任务`
+  return `${labelPrefix}完成“${title}”三段式任务`
 }
 
 function createChallenge(title, localKeywords, lens, difficulty) {
   return `限时挑战：围绕“${title}”写出一个 60 秒解释，并至少纳入 ${localKeywords[0] || '一个关键词'}、${localKeywords[1] || '一个应用情境'} 与 ${lens.name} 视角。当前难度：${difficulty}。`
 }
 
-function createScene(title, sceneKeyword, lens) {
-  return `情境引导：假设你正在一个与“${sceneKeyword}”相关的课堂、社区或服务场景中，需要向他人解释“${title}”，并体现 ${lens.name}。`
+function createScene(title, sceneKeyword, lens, sourceLabel = '') {
+  const sourceHint = sourceLabel ? `请先回到 ${sourceLabel} 对应的课件内容，` : ''
+  return `情境引导：${sourceHint}假设你正在一个与“${sceneKeyword}”相关的课堂、社区或服务场景中，需要向他人解释“${title}”，并体现 ${lens.name}。`
 }
 
 function buildKeyPoints(sentences, keywords) {
@@ -392,6 +513,10 @@ function createQuiz({ title, summary, localKeywords, index, allChunks, lens }) {
     rationale: `正确答案应同时体现“${title}”的核心知识与应用导向，而不是停留在机械记忆。`,
     stretchTask: `如果把本关知识带到真实场景，请尝试围绕 ${localKeywords[0] || '一个关键词'} 再举一个应用例子。`,
   }
+}
+
+function isGenericHeading(heading) {
+  return /^第\d+页$/.test(heading) || /^片段\s*\d+$/.test(heading) || /^第\s*\d+\s*关$/.test(heading)
 }
 
 function inferCourseTitle(text, filesMeta, keywords) {

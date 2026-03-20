@@ -8,6 +8,7 @@ import {
 } from './utils/gamification.js'
 import {
   COACH_MODES,
+  buildAbilityRadar,
   buildLearningDiagnosis,
   createChatMessage,
   createCompletionMessage,
@@ -19,6 +20,7 @@ import {
   createReflectionFeedback,
   generateAgentReply,
   getQuickPrompts,
+  getTeacherActionPrompts,
 } from './utils/agent.js'
 import {
   AI_PROVIDER_PRESETS,
@@ -129,7 +131,9 @@ function App() {
   )
   const currentCoachMode = session?.coachMode || '启发式'
   const learningDiagnosis = currentModule && session ? buildLearningDiagnosis(currentModule, session) : null
+  const abilityRadar = currentModule && session ? buildAbilityRadar(currentModule, session) : []
   const quickPrompts = currentModule ? getQuickPrompts(currentModule, currentCoachMode) : []
+  const teacherActionPrompts = currentModule ? getTeacherActionPrompts(currentModule, learningDiagnosis) : []
   const generationLabel = course?.runtime?.generator === 'llm' ? '真实大模型优化' : '本地生成'
 
   function updateForm(name, value) {
@@ -170,6 +174,7 @@ function App() {
           combinedText,
           builderForm,
           extracted.map((item) => item.meta),
+          extracted.flatMap((item) => item.units || []),
           extracted.flatMap((item) => item.warnings),
         ),
         runtime: { generator: 'local' },
@@ -216,6 +221,7 @@ function App() {
         DEMO_TEXT,
         builderForm,
         [{ name: '游戏化自学示例课件.txt', extension: 'txt', size: DEMO_TEXT.length, type: 'text/plain' }],
+        [],
         [],
       ),
       runtime: { generator: 'local' },
@@ -749,6 +755,17 @@ function App() {
                   </InfoBlock>
                 </div>
 
+                <InfoBlock title="课件结构映射">
+                  <div className="source-map">
+                    {course.modules.map((module) => (
+                      <div className="source-map__item" key={module.id}>
+                        <strong>{module.title}</strong>
+                        <span>{module.sourceLabel || '按文本语义自动拆分'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </InfoBlock>
+
                 <InfoBlock title="课件来源">
                   <div className="file-list file-list--compact">
                     {course.sourceFiles.map((file) => (
@@ -838,7 +855,23 @@ function App() {
                     <div className="diagnosis-card__body">
                       <p><strong>下一步：</strong>{learningDiagnosis.nextStep}</p>
                       <p><strong>当前抓手：</strong>{learningDiagnosis.focus}</p>
+                      {currentModule?.sourceLabel && <p><strong>对应课件：</strong>{currentModule.sourceLabel}</p>}
                     </div>
+                  </div>
+                )}
+
+                {abilityRadar.length > 0 && (
+                  <div className="ability-grid">
+                    {abilityRadar.map((item) => (
+                      <div className="ability-card" key={item.label}>
+                        <div className="ability-card__top">
+                          <strong>{item.label}</strong>
+                          <span>{item.score}</span>
+                        </div>
+                        <div className="ability-bar"><span style={{ width: `${item.score}%` }} /></div>
+                        <p>{item.note}</p>
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -1021,6 +1054,23 @@ function App() {
                     <button key={prompt} className="quick-action" disabled={chatLoading} onClick={() => handleSendChat(prompt)}>{prompt}</button>
                   ))}
                 </div>
+
+                <section className="coach-panel">
+                  <div className="coach-panel__head">
+                    <div>
+                      <h3>教学代理动作</h3>
+                      <p>这些按钮更像老师的即时教学动作，而不是普通聊天。</p>
+                    </div>
+                  </div>
+                  <div className="action-grid">
+                    {teacherActionPrompts.map((action) => (
+                      <button key={action.id} className="action-tile" disabled={chatLoading} onClick={() => handleSendChat(action.prompt)}>
+                        <strong>{action.label}</strong>
+                        <span>{action.prompt}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
 
                 <div className="chat-history">
                   {session.chatHistory.map((item) => (

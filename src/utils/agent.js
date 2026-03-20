@@ -202,6 +202,34 @@ export function buildLearningDiagnosis(module, session) {
   }
 }
 
+export function buildAbilityRadar(module, session) {
+  const answer = session?.answers?.[module.id]
+  const reflection = session?.reflections?.[module.id]?.trim() || ''
+  const cleared = session?.clearedModules?.includes(module.id)
+
+  const conceptScore = answer ? (answer.isCorrect ? 92 : 48) : 24
+  const transferScore = reflection ? Math.min(95, 30 + reflection.length) : 18
+  const actionScore = cleared ? 90 : answer && reflection ? 72 : 28
+  const socialWorkScore = reflection ? Math.min(94, reflection.includes(module.socialWorkFocus.theory) ? 88 : 58) : 20
+
+  return [
+    { label: '概念理解', score: conceptScore, note: answer ? (answer.isCorrect ? '已抓住主线' : '仍需校正') : '待完成挑战题' },
+    { label: '情境迁移', score: transferScore, note: reflection ? '已开始带入真实场景' : '尚未写迁移任务' },
+    { label: '行动设计', score: actionScore, note: cleared ? '已经具备通关行动' : '还可再具体一点' },
+    { label: '社工整合', score: socialWorkScore, note: reflection ? `建议继续强化 ${module.socialWorkFocus.theory}` : '尚未体现社工透镜' },
+  ]
+}
+
+export function getTeacherActionPrompts(module, diagnosis) {
+  return [
+    { id: 'probe', label: '追问我', prompt: `请围绕“${module.title}”连续追问我` },
+    { id: 'diagnose', label: '诊断薄弱点', prompt: `请诊断我在“${module.title}”这一关的薄弱点` },
+    { id: 'practice', label: '三步练习', prompt: `请为“${module.title}”生成三步递进练习` },
+    { id: 'story', label: '剧情任务', prompt: `请把“${module.title}”改写成一个剧情任务` },
+    { id: 'next', label: '下一步', prompt: diagnosis?.nextStep ? `请根据“${diagnosis.nextStep}”带我继续` : '下一步做什么' },
+  ]
+}
+
 export function generateAgentReply({ course, module, session, message, coachMode = '启发式' }) {
   const text = normalizeText(message)
   const lower = text.toLowerCase()
@@ -263,6 +291,35 @@ export function generateAgentReply({ course, module, session, message, coachMode
       challenge: `限时挑战题：请你在 40 秒内回答——“${module.title}”最容易被误解成什么？真正的重点又是什么？`,
       review: `复盘题：请你说出本关最核心的一个概念、一个情境和一个行动步骤。如果这三者能连上，说明你基本过关。`,
     })
+  }
+
+  if (matches(lower, ['追问', '连续追问'])) {
+    return createChatMessage(
+      'agent',
+      `好，我来追问你：1）“${module.title}”最容易被误解成什么？2）如果换一个对象或情境，这个知识点还成立吗？3）你会如何把它转成一个具体行动步骤？你先回答第一个问题。`,
+    )
+  }
+
+  if (matches(lower, ['薄弱点', '诊断'])) {
+    const diagnosis = buildLearningDiagnosis(module, session)
+    return createChatMessage(
+      'agent',
+      `当前诊断：${diagnosis.status}${diagnosis.nextStep} 你现在最该抓住的是：${diagnosis.focus}`,
+    )
+  }
+
+  if (matches(lower, ['三步练习', '递进练习'])) {
+    return createChatMessage(
+      'agent',
+      `给你一组三步递进练习：第一步，用一句话解释“${module.title}”；第二步，举一个真实情境例子；第三步，说明你会采取什么行动，并点出 ${module.socialWorkFocus.theory} 视角。完成后我可以继续帮你点评。`,
+    )
+  }
+
+  if (matches(lower, ['剧情任务', '改写成剧情'])) {
+    return createChatMessage(
+      'agent',
+      `剧情版任务：你现在是一名需要在真实课堂、社区或服务现场完成任务的行动者。目标是破解“${module.title}”带来的问题。你需要先识别对象处境，再调动资源，最后提出行动方案。完成后告诉我：你会先做哪一步？`,
+    )
   }
 
   if (matches(lower, ['限时挑战', '挑战'])) {

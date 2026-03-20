@@ -10,6 +10,7 @@ export async function extractTextFromFile(file) {
   }
 
   let text = ''
+  let units = []
 
   switch (extension) {
     case 'txt':
@@ -17,23 +18,35 @@ export async function extractTextFromFile(file) {
     case 'csv':
     case 'json':
       text = await file.text()
+      units = buildTextUnits(text)
       break
     case 'html':
     case 'htm':
       text = stripHtml(await file.text())
+      units = buildTextUnits(text)
       break
-    case 'pdf':
-      text = await extractPdfText(file)
+    case 'pdf': {
+      const result = await extractPdfText(file)
+      text = result.text
+      units = result.units
       break
-    case 'docx':
-      text = await extractDocxText(file)
+    }
+    case 'docx': {
+      const result = await extractDocxText(file)
+      text = result.text
+      units = result.units
       break
-    case 'pptx':
-      text = await extractPptxText(file)
+    }
+    case 'pptx': {
+      const result = await extractPptxText(file)
+      text = result.text
+      units = result.units
       break
+    }
     default:
       if (file.type.startsWith('text/')) {
         text = await file.text()
+        units = buildTextUnits(text)
       } else {
         throw new Error(`暂不支持解析 ${extension || file.type || '该格式'}。建议上传 pdf、docx、pptx、txt 或 md。`)
       }
@@ -46,6 +59,7 @@ export async function extractTextFromFile(file) {
 
   return {
     text: cleaned,
+    units,
     meta: {
       name,
       extension,
@@ -73,24 +87,38 @@ async function extractPdfText(file) {
   for (let i = 1; i <= pdf.numPages; i += 1) {
     const page = await pdf.getPage(i)
     const content = await page.getTextContent()
-    const pageText = content.items
-      .map((item) => ('str' in item ? item.str : ''))
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim()
+    const pageText = normalizeText(
+      content.items
+        .map((item) => ('str' in item ? item.str : ''))
+        .join(' '),
+    )
+
     if (pageText) {
-      pages.push(`第${i}页\n${pageText}`)
+      pages.push({
+        id: `pdf-page-${i}`,
+        title: `第${i}页`,
+        order: i,
+        kind: 'pdf-page',
+        text: pageText,
+      })
     }
   }
 
-  return pages.join('\n\n')
+  return {
+    text: pages.map((page) => `${page.title}\n${page.text}`).join('\n\n'),
+    units: pages,
+  }
 }
 
 async function extractDocxText(file) {
   const mammoth = await import('mammoth')
   const arrayBuffer = await file.arrayBuffer()
   const result = await mammoth.extractRawText({ arrayBuffer })
-  return result.value || ''
+  const text = result.value || ''
+  return {
+    text,
+    units: buildTextUnits(text),
+  }
 }
 
 async function extractPptxText(file) {
@@ -111,11 +139,36 @@ async function extractPptxText(file) {
     const texts = nodes.map((node) => node.textContent?.trim()).filter(Boolean)
     if (texts.length > 0) {
       const slideNo = getSlideNumber(slideFile)
-      slides.push(`第${slideNo}页\n${texts.join('；')}`)
+      const slideText = normalizeText(texts.join('；'))
+      slides.push({
+        id: `ppt-slide-${slideNo}`,
+        title: `第${slideNo}页`,
+        order: slideNo,
+        kind: 'ppt-slide',
+        text: slideText,
+      })
     }
   }
 
-  return slides.join('\n\n')
+  return {
+    text: slides.map((slide) => `${slide.title}\n${slide.text}`).join('\n\n'),
+    units: slides,
+  }
+}
+
+function buildTextUnits(text) {
+  return normalizeText(text)
+    .split(/\n{2,}/)
+    .map((item) => normalizeText(item))
+    .filter((item) => item.length > 20)
+    .slice(0, 24)
+    .map((item, index) => ({
+      id: `text-unit-${index + 1}`,
+      title: `片段 ${index + 1}`,
+      order: index + 1,
+      kind: 'text-block',
+      text: item,
+    }))
 }
 
 function getSlideNumber(path) {
