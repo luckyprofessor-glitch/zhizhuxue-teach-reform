@@ -236,6 +236,11 @@ export function buildCourseFromText(text, options = {}, filesMeta = [], sourceUn
       opening: `我会把你的课件变成闯关地图、即时问答与应用任务，陪你把知识真正学会。`,
       quickActions: ['解释一下', '举个例子', '给我提示', '出一道题', '总结一下', '下一步做什么'],
     },
+    classroom: {
+      className: (options.className || '').trim(),
+      teacherName: (options.teacherName || '').trim(),
+      entryCode: (options.entryCode || '').trim(),
+    },
     theoryBridge: {
       socialWork: `${lens.name}：${lens.tagline}`,
       ai: 'AI 模块负责自动拆分课件、提炼重点、生成任务、即时回答问题，并根据学生进度给出下一步建议。',

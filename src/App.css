@@ -367,6 +367,18 @@
   box-shadow: none;
 }
 
+.button--file {
+  position: relative;
+  overflow: hidden;
+}
+
+.button--file input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
 .summary-header {
   display: flex;
   justify-content: space-between;
@@ -542,6 +554,28 @@
   gap: 10px;
 }
 
+.share-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.72);
+  margin-bottom: 12px;
+}
+
+.share-card strong,
+.share-card p {
+  margin: 0;
+}
+
+.share-card p {
+  color: var(--muted);
+  margin-top: 6px;
+}
+
 .source-map__item {
   display: flex;
   justify-content: space-between;
@@ -627,6 +661,11 @@
 .archive-item__content {
   display: grid;
   gap: 4px;
+  flex: 1 1 auto;
+}
+
+.archive-item__action {
+  width: auto;
 }
 
 .study-space {
@@ -1143,7 +1182,9 @@
   .card__header,
   .config-panel__head,
   .coach-panel__head,
-  .source-map__item {
+  .source-map__item,
+  .share-card,
+  .passport-card {
     flex-direction: column;
   }
 

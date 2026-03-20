@@ -98,6 +98,7 @@ export function buildJourneyRecord(course, session) {
     badges: session.badges || [],
     updatedAt: new Date().toISOString(),
     startedAt: session.startedAt,
+    sessionSnapshot: session,
   }
 }
 

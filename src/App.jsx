@@ -60,6 +60,9 @@ const DEMO_TEXT = `
 const DEFAULT_FORM = {
   courseTitle: '智助学｜AI游戏化课件自学工具',
   targetLearners: '本科生',
+  className: '社会工作导论',
+  teacherName: '',
+  entryCode: '',
   socialLens: '优势视角',
   gameStyle: '闯关式',
   moduleCount: 5,
@@ -88,6 +91,7 @@ function App() {
   const [learnerName, setLearnerName] = useState(initialSession?.learnerName || '')
   const [learnerClass, setLearnerClass] = useState(initialSession?.learnerClass || '')
   const [learningGoal, setLearningGoal] = useState(initialSession?.learningGoal || '')
+  const [entryCodeInput, setEntryCodeInput] = useState('')
   const [chatInput, setChatInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [chatLoading, setChatLoading] = useState(false)
@@ -166,6 +170,57 @@ function App() {
     setAiConfig((prev) => applyProviderPreset(provider, prev))
   }
 
+  function handleExportCoursePackage() {
+    if (!course) {
+      setError('请先生成课程，再导出课程包。')
+      return
+    }
+
+    const payload = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      course,
+    }
+
+    downloadJsonFile(`${slugifyFileName(course.title || '课程包')}.json`, payload)
+    setNotice('课程包已导出。你可以把 JSON 文件发给学生或同事，再由对方导入。')
+  }
+
+  async function handleImportCoursePackage(event) {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+
+    try {
+      const raw = await file.text()
+      const payload = JSON.parse(raw)
+      const nextCourse = payload?.course
+      if (!nextCourse?.modules || !Array.isArray(nextCourse.modules)) {
+        throw new Error('课程包格式无效，未找到可读取的课程结构。')
+      }
+
+      setCourse(nextCourse)
+      setSession(null)
+      setLearnerName('')
+      setLearnerClass('')
+      setLearningGoal('')
+      setEntryCodeInput('')
+      setChatInput('')
+      setBuilderForm((prev) => ({
+        ...prev,
+        ...(nextCourse.settings || {}),
+        courseTitle: nextCourse.title || prev.courseTitle,
+      }))
+      setNotice(`课程包《${nextCourse.title}》已导入。现在可以直接进入学生自学模式。`)
+      setError('')
+    } catch (importError) {
+      setError(importError.message || '导入课程包失败，请检查 JSON 文件。')
+    } finally {
+      event.target.value = ''
+    }
+  }
+
   async function handleGenerateCourse() {
     if (uploadedFiles.length === 0) {
       setError('请先上传至少一个课件文件。')
@@ -226,6 +281,7 @@ function App() {
       setLearnerName('')
       setLearnerClass('')
       setLearningGoal('')
+      setEntryCodeInput('')
       setChatInput('')
       setNotice(courseNotice)
     } catch (buildError) {
@@ -252,6 +308,7 @@ function App() {
     setLearnerName('')
     setLearnerClass('')
     setLearningGoal('')
+    setEntryCodeInput('')
     setChatInput('')
     setError('')
     setNotice('已载入示例课件。你可以直接体验“上传课件—AI 生成关卡—学生闯关—智能体陪学”的完整流程。')
@@ -265,6 +322,7 @@ function App() {
     setLearnerName('')
     setLearnerClass('')
     setLearningGoal('')
+    setEntryCodeInput('')
     setChatInput('')
     setError('')
     setNotice('已清空当前课件、学习旅程与本地缓存。')
@@ -282,6 +340,12 @@ function App() {
   function handleStartJourney() {
     if (!course) {
       setError('请先上传并生成课程。')
+      return
+    }
+
+    const expectedCode = course.classroom?.entryCode?.trim()
+    if (expectedCode && entryCodeInput.trim() !== expectedCode) {
+      setError('课程入口码不正确，请核对后再进入。')
       return
     }
 
@@ -315,6 +379,20 @@ function App() {
     setSession(null)
     setChatInput('')
     setNotice('已重置当前学习旅程。你可以重新开始闯关。')
+  }
+
+  function handleRestoreJourney(record) {
+    if (!course || record.courseId !== course.id || !record.sessionSnapshot) {
+      setError('当前课程与该学习档案不匹配，无法直接恢复。')
+      return
+    }
+
+    setSession(record.sessionSnapshot)
+    setLearnerName(record.sessionSnapshot.learnerName || '')
+    setLearnerClass(record.sessionSnapshot.learnerClass || '')
+    setLearningGoal(record.sessionSnapshot.learningGoal || '')
+    setNotice(`已恢复 ${record.learnerName} 的最近学习档案。`)
+    setError('')
   }
 
   function handleCoachModeChange(modeId) {
@@ -629,6 +707,15 @@ function App() {
               <Field label="适用对象">
                 <input value={builderForm.targetLearners} onChange={(e) => updateForm('targetLearners', e.target.value)} />
               </Field>
+              <Field label="课程／班级名称">
+                <input value={builderForm.className} onChange={(e) => updateForm('className', e.target.value)} placeholder="例如：社会工作导论 / 2026社工1班" />
+              </Field>
+              <Field label="教师姓名（选填）">
+                <input value={builderForm.teacherName} onChange={(e) => updateForm('teacherName', e.target.value)} placeholder="例如：张老师" />
+              </Field>
+              <Field label="课程入口码（选填）">
+                <input value={builderForm.entryCode} onChange={(e) => updateForm('entryCode', e.target.value)} placeholder="例如：SW2026" />
+              </Field>
               <Field label="社工理论透镜">
                 <select value={builderForm.socialLens} onChange={(e) => updateForm('socialLens', e.target.value)}>
                   {Object.keys(SOCIAL_WORK_LENSES).map((key) => (
@@ -814,6 +901,23 @@ function App() {
                   </div>
                 </InfoBlock>
 
+                <InfoBlock title="课程分享与入口">
+                  <div className="share-card">
+                    <div>
+                      <strong>{course.classroom?.className || builderForm.className || '未命名课程入口'}</strong>
+                      <p>教师：{course.classroom?.teacherName || '未填写'} ｜ 入口码：{course.classroom?.entryCode || '未设置，学生可直接进入'}</p>
+                    </div>
+                    <div className="button-row">
+                      <button className="button button--secondary" onClick={handleExportCoursePackage}>导出课程包</button>
+                      <label className="button button--ghost button--file">
+                        导入课程包
+                        <input type="file" accept="application/json,.json" onChange={handleImportCoursePackage} />
+                      </label>
+                    </div>
+                  </div>
+                  <p className="muted">如果你要把课程发给学生或同事，可以导出课程包 JSON，再在另一台设备上导入。静态网页环境下，这是最稳妥的分享方式。</p>
+                </InfoBlock>
+
                 <InfoBlock title="课件来源">
                   <div className="file-list file-list--compact">
                     {course.sourceFiles.map((file) => (
@@ -882,6 +986,15 @@ function App() {
                       placeholder="例如：想搞懂优势视角怎么落地"
                     />
                   </Field>
+                  {course.classroom?.entryCode && (
+                    <Field label="课程入口码">
+                      <input
+                        value={entryCodeInput}
+                        onChange={(e) => setEntryCodeInput(e.target.value)}
+                        placeholder="请输入教师提供的入口码"
+                      />
+                    </Field>
+                  )}
                   <button className="button" onClick={handleStartJourney}>开始闯关</button>
                 </div>
 
@@ -902,6 +1015,9 @@ function App() {
                             <p>{item.learnerClass || '未填写班级'}{item.learningGoal ? `｜目标：${item.learningGoal}` : ''}</p>
                             <p>进度 {item.progressPercent}% ｜ Lv.{item.level} ｜ 徽章 {item.badges.length}</p>
                           </div>
+                          {course && item.courseId === course.id && item.sessionSnapshot && (
+                            <button className="button button--ghost archive-item__action" onClick={() => handleRestoreJourney(item)}>恢复</button>
+                          )}
                         </article>
                       ))}
                     </div>
@@ -1375,6 +1491,23 @@ function formatFileSize(size) {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function slugifyFileName(value) {
+  return String(value || 'course-package')
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, '_')
+    .slice(0, 60)
+}
+
+function downloadJsonFile(filename, data) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 export default App
