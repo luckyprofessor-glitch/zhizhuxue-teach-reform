@@ -171,9 +171,17 @@ export function buildCourseFromText(text, options = {}, filesMeta = [], sourceUn
       story: createStoryTitle(title, index, style, seed.shortLabel),
       challenge: createChallenge(title, localKeywords, lens, difficulty),
       scene: createScene(title, sceneKeyword, lens, seed.label),
+      realmName: createRealmName(title, index),
       sourceLabel: seed.label,
       sourceKind: seed.kind,
       sourceUnits: seed.units,
+      collectibles: createCollectibles(localKeywords, fullKeywords, index),
+      scenario: createScenario(title, sceneKeyword, lens, localKeywords, fullKeywords),
+      boss: createBoss(title, index, difficulty),
+      rewards: {
+        coins: 30 + index * 5,
+        gems: index % 2 === 0 ? 1 : 2,
+      },
       missions: [
         {
           id: `module-${index + 1}-scan`,
@@ -246,8 +254,14 @@ export function buildCourseFromText(text, options = {}, filesMeta = [], sourceUn
       ai: 'AI 模块负责自动拆分课件、提炼重点、生成任务、即时回答问题，并根据学生进度给出下一步建议。',
       pedagogy: `${style}：${GAME_STYLES[style] || GAME_STYLES.闯关式}`,
     },
+    gameMeta: {
+      worldName: createWorldName(title, lens.name),
+      heroTitle: '学习探索者',
+      startNarrative: `你的任务是穿越 ${modules.length} 个知识关卡，收集概念碎片、完成情境抉择，并在终局挑战中把整门课转化为可执行方案。`,
+    },
     finalBoss: {
       title: '终局任务｜把整门课带回真实世界',
+      bossName: '知识终幕之门',
       prompt: `请结合整门课的核心概念，设计一个可落地的小方案，说明你会如何在真实教学、社区或服务情境中应用这些知识，并体现 ${lens.name}。`,
       rubric: [
         '是否点明至少两个核心概念',
@@ -480,6 +494,49 @@ function createChallenge(title, localKeywords, lens, difficulty) {
 function createScene(title, sceneKeyword, lens, sourceLabel = '') {
   const sourceHint = sourceLabel ? `请先回到 ${sourceLabel} 对应的课件内容，` : ''
   return `情境引导：${sourceHint}假设你正在一个与“${sceneKeyword}”相关的课堂、社区或服务场景中，需要向他人解释“${title}”，并体现 ${lens.name}。`
+}
+
+function createRealmName(title, index) {
+  const suffixes = ['认知之境', '理解回廊', '情境驿站', '行动工坊', '迁移之门', '任务原野']
+  return `${title}${suffixes[index % suffixes.length]}`
+}
+
+function createCollectibles(localKeywords, fullKeywords, index) {
+  const seeds = [...localKeywords, ...fullKeywords].filter(Boolean)
+  return seeds.slice(0, 3).map((keyword, itemIndex) => ({
+    id: `collectible-${index + 1}-${itemIndex + 1}`,
+    label: keyword,
+    type: itemIndex === 0 ? '知识卡' : itemIndex === 1 ? '情境卡' : '策略卡',
+    rewardCoins: 6 + itemIndex * 2,
+  }))
+}
+
+function createScenario(title, sceneKeyword, lens, localKeywords, fullKeywords) {
+  const anchor = localKeywords[0] || fullKeywords[0] || '核心概念'
+  const support = localKeywords[1] || fullKeywords[1] || '情境因素'
+  return {
+    prompt: `你进入了“${title}”对应的场景。面对与“${sceneKeyword}”相关的问题时，哪种行动最符合本关目标？`,
+    options: [
+      `先机械背诵 ${anchor} 的定义，不考虑对象情境。`,
+      `先识别对象与处境，再结合 ${anchor} 和 ${support} 设计行动。`,
+      `把问题完全交给他人处理，自己只记录现象。`,
+    ],
+    bestIndex: 1,
+    rationale: `更优策略应同时考虑知识点、情境与行动步骤，并体现 ${lens.name}。`,
+  }
+}
+
+function createBoss(title, index, difficulty) {
+  const names = ['误解守门者', '情境迷雾兽', '记忆偏差体', '迁移试炼官', '行动边界兽']
+  return {
+    name: names[index % names.length],
+    intro: `击败 ${names[index % names.length]}，证明你真正理解了“${title}”。`,
+    hp: difficulty === '挑战' ? 4 : difficulty === '进阶' ? 3 : 2,
+  }
+}
+
+function createWorldName(courseTitle, lensName) {
+  return `${courseTitle} · ${lensName}冒险地图`
 }
 
 function buildKeyPoints(sentences, keywords) {
