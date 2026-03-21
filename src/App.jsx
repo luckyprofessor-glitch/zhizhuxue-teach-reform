@@ -108,6 +108,29 @@ function App() {
   const [notice, setNotice] = useState(sharedCourseFromUrl ? '已从分享链接自动载入课程。任何打开该网址的人都可以直接进入学习。' : '')
   const [error, setError] = useState(sharedImport.error || '')
 
+  const aiReady = canUseRealAI(aiConfig)
+  const aiGenerationEnabled = aiReady && aiConfig.useForCourseGeneration
+  const aiChatEnabled = aiReady && aiConfig.useForTutorChat
+
+  const buildAutoSession = useCallback((targetCourse) => {
+    const nextSession = createStudySession(targetCourse, {
+      learnerName: '学习者',
+      learnerClass: '',
+      learningGoal: '',
+    })
+    nextSession.chatHistory = [
+      ...createOpeningMessages(targetCourse, '学习者'),
+      createChatMessage(
+        'agent',
+        aiChatEnabled
+          ? `当前已接入真实大模型 ${aiConfig.model}。你可以更自由地提问，我会结合当前课件内容即时回应。`
+          : '当前为内置陪练模式。你现在可以直接开始看内容、做题，并随时向我提问。',
+      ),
+      createModuleArrivalMessage(targetCourse.modules[0]),
+    ]
+    return nextSession
+  }, [aiChatEnabled, aiConfig.model])
+
   useEffect(() => {
     if (course) {
       saveStoredJson(STORAGE_KEYS.course, course)
@@ -143,10 +166,6 @@ function App() {
       setSession(buildAutoSession(course))
     }
   }, [course, session, buildAutoSession])
-
-  const aiReady = canUseRealAI(aiConfig)
-  const aiGenerationEnabled = aiReady && aiConfig.useForCourseGeneration
-  const aiChatEnabled = aiReady && aiConfig.useForTutorChat
 
   const currentModule = useMemo(() => {
     if (!course) return null
@@ -186,25 +205,6 @@ function App() {
   function handleProviderChange(provider) {
     setAiConfig((prev) => applyProviderPreset(provider, prev))
   }
-
-  const buildAutoSession = useCallback((targetCourse) => {
-    const nextSession = createStudySession(targetCourse, {
-      learnerName: '学习者',
-      learnerClass: '',
-      learningGoal: '',
-    })
-    nextSession.chatHistory = [
-      ...createOpeningMessages(targetCourse, '学习者'),
-      createChatMessage(
-        'agent',
-        aiChatEnabled
-          ? `当前已接入真实大模型 ${aiConfig.model}。你可以更自由地提问，我会结合当前课件内容即时回应。`
-          : '当前为内置陪练模式。你现在可以直接开始看内容、做题，并随时向我提问。',
-      ),
-      createModuleArrivalMessage(targetCourse.modules[0]),
-    ]
-    return nextSession
-  }, [aiChatEnabled, aiConfig.model])
 
   async function handleCopyShareUrl() {
     if (!course) {
