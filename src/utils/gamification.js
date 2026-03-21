@@ -175,9 +175,18 @@ export function buildCourseFromText(text, options = {}, filesMeta = [], sourceUn
       sourceLabel: seed.label,
       sourceKind: seed.kind,
       sourceUnits: seed.units,
-      collectibles: createCollectibles(localKeywords, fullKeywords, index),
+      collectibles: createCollectibles(localKeywords, fullKeywords, index, summary, keyPoints),
       scenario: createScenario(title, sceneKeyword, lens, localKeywords, fullKeywords),
       boss: createBoss(title, index, difficulty),
+      bossBattle: createBossBattle({
+        title,
+        summary,
+        localKeywords,
+        fullKeywords,
+        lens,
+        quiz,
+        difficulty,
+      }),
       rewards: {
         coins: 30 + index * 5,
         gems: index % 2 === 0 ? 1 : 2,
@@ -227,7 +236,7 @@ export function buildCourseFromText(text, options = {}, filesMeta = [], sourceUn
     id: `course-${Date.now()}`,
     title,
     subtitle: `${options.targetLearners || '学生'}自学模式｜${style}｜${lens.name}`,
-    description: `系统已把上传课件重构为 ${modules.length} 个可互动的游戏化关卡，学生可以与智能体边学边问边闯关。${structureDescription}`,
+    description: `系统已把上传课件重构为 ${modules.length} 个可互动的游戏化关卡，学生可以直接进行翻牌侦察、情境抉择、Boss 战与终局挑战。${structureDescription}`,
     keywords: fullKeywords,
     learningObjectives: modules.slice(0, 4).map((module, index) => `目标 ${index + 1}：掌握“${module.title}”，并能结合 ${lens.name} 说清其真实应用情境。`),
     modules,
@@ -501,14 +510,26 @@ function createRealmName(title, index) {
   return `${title}${suffixes[index % suffixes.length]}`
 }
 
-function createCollectibles(localKeywords, fullKeywords, index) {
+function createCollectibles(localKeywords, fullKeywords, index, summary = '', keyPoints = []) {
   const seeds = [...localKeywords, ...fullKeywords].filter(Boolean)
   return seeds.slice(0, 3).map((keyword, itemIndex) => ({
     id: `collectible-${index + 1}-${itemIndex + 1}`,
     label: keyword,
     type: itemIndex === 0 ? '知识卡' : itemIndex === 1 ? '情境卡' : '策略卡',
     rewardCoins: 6 + itemIndex * 2,
+    clue: createCollectibleClue(keyword, itemIndex, summary, keyPoints),
   }))
+}
+
+function createCollectibleClue(keyword, itemIndex, summary = '', keyPoints = []) {
+  const anchor = keyPoints[itemIndex] || keyPoints[0] || summary || keyword
+  if (itemIndex === 1) {
+    return `把“${keyword}”带回情境：${shorten(anchor, 30)}`
+  }
+  if (itemIndex === 2) {
+    return `把“${keyword}”变成行动：${shorten(anchor, 30)}`
+  }
+  return `抓住“${keyword}”的核心含义：${shorten(anchor, 30)}`
 }
 
 function createScenario(title, sceneKeyword, lens, localKeywords, fullKeywords) {
@@ -532,6 +553,85 @@ function createBoss(title, index, difficulty) {
     name: names[index % names.length],
     intro: `击败 ${names[index % names.length]}，证明你真正理解了“${title}”。`,
     hp: difficulty === '挑战' ? 4 : difficulty === '进阶' ? 3 : 2,
+  }
+}
+
+function createBossBattle({ title, summary, localKeywords, fullKeywords, lens, quiz, difficulty }) {
+  const totalRounds = difficulty === '挑战' ? 4 : difficulty === '进阶' ? 3 : 2
+  const anchor = localKeywords[0] || fullKeywords[0] || '核心概念'
+  const support = localKeywords[1] || fullKeywords[1] || '真实情境'
+  const action = localKeywords[2] || fullKeywords[2] || '行动策略'
+  const recallAnswer = quiz.options[quiz.correctIndex] || shorten(summary, 42)
+
+  const rounds = [
+    createBattleRound({
+      question: quiz.question,
+      correct: recallAnswer,
+      distractors: [
+        `只背诵 ${anchor} 的定义，不需要理解情境。`,
+        `重点偏向 ${support} 之外的其他主题，与本关主线不大相关。`,
+        '本关只要求完成打卡，不需要解释和应用。',
+      ],
+      rationale: quiz.rationale,
+      hint: `先回到本关摘要：${shorten(summary, 34)}`,
+      flavor: '第一回合先确认你是否抓住了主线。',
+      seed: `${title}-boss-round-1`,
+    }),
+    createBattleRound({
+      question: `若把“${title}”带入真实情境，哪种做法更合理？`,
+      correct: `先识别对象与处境，再把 ${anchor} 和 ${support} 组织成行动。`,
+      distractors: [
+        `先机械背诵 ${anchor} 的定义，不分析场景。`,
+        '把问题完全交给别人处理，自己不做判断。',
+        '只追求立刻完成，不说明为什么这样做。',
+      ],
+      rationale: '这一步考查的不是记忆，而是把知识带入情境的能力。',
+      hint: '先想清楚“对象是谁、处境如何、为什么要这样做”。',
+      flavor: '第二回合开始考查真实应用。',
+      seed: `${title}-boss-round-2`,
+    }),
+    createBattleRound({
+      question: `哪种回答最能体现 ${lens.name} 视角？`,
+      correct: `把 ${anchor}、${support} 与学习者已有资源连接起来，再推进 ${action}。`,
+      distractors: [
+        '只强调不足，不考虑已有资源与支持。',
+        '只给结论，不说明行动步骤。',
+        `把 ${action} 看成孤立动作，不考虑关系与情境。`,
+      ],
+      rationale: `真正体现 ${lens.name}，必须把知识、情境、资源与行动一起考虑。`,
+      hint: `回忆 ${lens.name} 最重视的价值逻辑，再判断选项。`,
+      flavor: '第三回合考查理论透镜是否真正落地。',
+      seed: `${title}-boss-round-3`,
+    }),
+    createBattleRound({
+      question: '面对 Boss 的最终追问，哪种回答最完整？',
+      correct: `说明核心概念、对象情境、可动员资源与下一步行动，形成完整方案。`,
+      distractors: [
+        '只说一个定义，不解释适用条件。',
+        '只给口号，不提出可执行步骤。',
+        '只描述困难，不说明支持资源和行动路径。',
+      ],
+      rationale: '终局答案要形成概念—情境—资源—行动的闭环。',
+      hint: '把答案组织成“四步走”：概念、情境、资源、行动。',
+      flavor: '最终回合要求你把整关知识整合起来。',
+      seed: `${title}-boss-round-4`,
+    }),
+  ]
+
+  return {
+    rounds: rounds.slice(0, totalRounds),
+  }
+}
+
+function createBattleRound({ question, correct, distractors, rationale, hint, flavor, seed }) {
+  const options = shuffleDeterministically([correct, ...distractors].slice(0, 4), seed)
+  return {
+    question,
+    options,
+    correctIndex: options.indexOf(correct),
+    rationale,
+    hint,
+    flavor,
   }
 }
 

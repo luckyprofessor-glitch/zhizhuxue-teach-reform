@@ -523,7 +523,8 @@
 
 .collect-card,
 .choice-card,
-.inventory-card {
+.inventory-card,
+.memory-card {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -535,28 +536,181 @@
   color: var(--text);
 }
 
-.collect-card {
+.choice-card,
+.memory-card {
   cursor: pointer;
 }
 
 .collect-card--active,
-.choice-card--selected {
+.choice-card--selected,
+.memory-card--open {
   border-color: var(--accent);
   box-shadow: inset 0 0 0 1px rgba(79, 70, 229, 0.18);
   background: rgba(79, 70, 229, 0.07);
-}
-
-.choice-card {
-  cursor: pointer;
 }
 
 .choice-card input {
   display: none;
 }
 
-.quiz-battle h4,
+.memory-forge {
+  display: grid;
+  gap: 14px;
+}
+
+.memory-board {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.memory-card {
+  min-height: 132px;
+  justify-content: space-between;
+  transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+}
+
+.memory-card:hover {
+  transform: translateY(-2px);
+}
+
+.memory-card--back {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: white;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: var(--shadow-accent);
+}
+
+.memory-card--matched {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.14), rgba(14, 165, 233, 0.1));
+  border-color: rgba(16, 185, 129, 0.35);
+  box-shadow: none;
+}
+
+.memory-card__badge {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(79, 70, 229, 0.1);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.memory-card__icon {
+  font-size: 28px;
+  font-weight: 900;
+}
+
+.memory-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.boss-arena {
+  display: grid;
+  gap: 16px;
+}
+
+.arena-bars {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.meter-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.meter-card span {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.meter-orbs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hp-orb {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.3);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+}
+
+.hp-orb--filled {
+  background: linear-gradient(135deg, #22c55e, #06b6d4);
+  border-color: rgba(34, 197, 94, 0.5);
+}
+
+.hp-orb--heart.hp-orb--filled {
+  background: linear-gradient(135deg, #ef4444, #fb7185);
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.arena-phase {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.08), rgba(14, 165, 233, 0.08));
+}
+
+.arena-phase h4,
 .sub-card h4 {
-  margin: 0 0 12px;
+  margin: 0;
+}
+
+.arena-phase p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.arena-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.battle-tip,
+.battle-log {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 16px;
+}
+
+.battle-tip {
+  background: rgba(14, 165, 233, 0.12);
+  color: #0c4a6e;
+}
+
+.battle-log--success {
+  background: rgba(16, 185, 129, 0.12);
+  color: #166534;
+}
+
+.battle-log--error {
+  background: rgba(239, 68, 68, 0.12);
+  color: #991b1b;
 }
 
 .result-text {
@@ -680,6 +834,8 @@
   .scene-panel,
   .card-grid,
   .choice-grid,
+  .memory-board,
+  .arena-bars,
   .cover-panel {
     grid-template-columns: 1fr;
   }

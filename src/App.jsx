@@ -121,6 +121,9 @@ function App() {
   const shareUrl = course ? buildShareUrl(course) : ''
   const shareUrlLength = course ? estimateShareUrlLength(course) : 0
   const inventory = useMemo(() => flattenCollectedCards(course, gameState), [course, gameState])
+  const currentCollectibles = currentModule ? getCollectibles(currentModule) : []
+  const currentBattle = currentModule && gameState ? getBattleState(currentModule, gameState.quiz[currentModule.id]) : null
+  const currentBossRounds = currentModule ? getBossRounds(currentModule) : []
   const currentProgress = currentModule && gameState ? getModuleProgress(currentModule, gameState) : null
 
   function updateForm(name, value) {
@@ -344,40 +347,118 @@ function App() {
       return
     }
 
-    setGameState((prev) => {
-      const current = prev.quiz[module.id] || { attempts: 0, correct: false }
-      if (current.correct) {
-        return prev
-      }
+    if (!gameState || gameState.hearts <= 0) {
+      setError('能量已耗尽，请先补充能量再继续 Boss 战。')
+      return
+    }
 
-      const isCorrect = selectedIndex === module.quiz.correctIndex
+    const rounds = getBossRounds(module)
+    const battle = getBattleState(module, gameState.quiz[module.id])
+    if (battle.correct) {
+      return
+    }
+
+    const roundIndex = Math.min(battle.currentRound, Math.max(0, rounds.length - 1))
+    const round = rounds[roundIndex]
+    const isCorrect = selectedIndex === round.correctIndex
+    const nextBossHp = isCorrect ? Math.max(0, battle.bossHpRemaining - 1) : battle.bossHpRemaining
+    const victory = isCorrect && nextBossHp === 0
+
+    setGameState((prev) => {
+      const prevBattle = getBattleState(module, prev.quiz[module.id])
+      const prevRoundIndex = Math.min(prevBattle.currentRound, Math.max(0, rounds.length - 1))
+      const prevRound = rounds[prevRoundIndex]
+      const prevCorrect = selectedIndex === prevRound.correctIndex
+      const updatedBossHp = prevCorrect ? Math.max(0, prevBattle.bossHpRemaining - 1) : prevBattle.bossHpRemaining
+      const updatedVictory = prevCorrect && updatedBossHp === 0
+
       return {
         ...prev,
-        xp: prev.xp + (isCorrect ? 20 : 6),
-        hearts: isCorrect ? prev.hearts : Math.max(0, prev.hearts - 1),
+        xp: prev.xp + (prevCorrect ? 18 : 5),
+        coins: prev.coins + (prevCorrect ? 4 : 0),
+        hearts: prevCorrect ? prev.hearts : Math.max(0, prev.hearts - 1),
         quiz: {
           ...prev.quiz,
           [module.id]: {
-            attempts: current.attempts + 1,
-            selectedIndex,
-            correct: isCorrect,
+            ...prevBattle,
+            attempts: prevBattle.attempts + 1,
+            currentRound: updatedVictory ? prevRoundIndex : Math.min(prevRoundIndex + (prevCorrect ? 1 : 0), Math.max(0, rounds.length - 1)),
+            bossHpRemaining: updatedBossHp,
+            correct: updatedVictory,
+            lastSelectedIndex: selectedIndex,
+            history: [
+              ...prevBattle.history,
+              {
+                roundIndex: prevRoundIndex,
+                selectedIndex,
+                correct: prevCorrect,
+              },
+            ],
           },
         },
       }
     })
+
+    if (victory) {
+      setError('')
+      setNotice(`你击败了 ${module.boss?.name || '本关 Boss'}，现在可以整理通关笔记了。`)
+    } else if (isCorrect) {
+      setError('')
+      setNotice(`命中！${module.boss?.name || 'Boss'} 还剩 ${nextBossHp} 格耐久。`)
+    } else {
+      setNotice('')
+      setError(`回答不够准确，Boss 发起反击。${round.rationale}`)
+    }
+  }
+
+  function handleUseBattleHint(module) {
+    if (!gameState) {
+      return
+    }
+
+    const battle = getBattleState(module, gameState.quiz[module.id])
+    if (battle.correct) {
+      return
+    }
+    if (gameState.gems < 1) {
+      setError('宝石不足，无法开启战术提示。')
+      return
+    }
+    if (battle.revealedHints.includes(battle.currentRound)) {
+      setNotice('本回合的战术提示已经开启。')
+      return
+    }
+
+    setGameState((prev) => {
+      const prevBattle = getBattleState(module, prev.quiz[module.id])
+      return {
+        ...prev,
+        gems: prev.gems - 1,
+        quiz: {
+          ...prev.quiz,
+          [module.id]: {
+            ...prevBattle,
+            revealedHints: [...prevBattle.revealedHints, prevBattle.currentRound],
+          },
+        },
+      }
+    })
+    setError('')
+    setNotice('已消耗 1 颗宝石，战术提示已开启。')
   }
 
   function handleRecoverHearts() {
-    setGameState((prev) => {
-      if (prev.coins < 10 || prev.hearts >= 5) {
-        return prev
-      }
-      return {
-        ...prev,
-        coins: prev.coins - 10,
-        hearts: Math.min(5, prev.hearts + 3),
-      }
-    })
+    if (!gameState || gameState.coins < 10 || gameState.hearts >= 5) {
+      return
+    }
+
+    setGameState((prev) => ({
+      ...prev,
+      coins: prev.coins - 10,
+      hearts: Math.min(5, prev.hearts + 3),
+    }))
+    setError('')
+    setNotice('已恢复 3 点能量，可以继续闯关。')
   }
 
   function handleSaveStageNote(moduleId, text) {
@@ -666,26 +747,16 @@ function App() {
                     <div className="quest-card__head">
                       <img src={scrollImg} alt="知识卡牌" />
                       <div>
-                        <h3>任务 1｜收集知识卡牌</h3>
-                        <p>点击收集当前关卡的核心概念，组建你的学习卡组。</p>
+                        <h3>任务 1｜翻牌侦察</h3>
+                        <p>把概念卡与线索卡配对成功，才能真正收集到本关知识碎片。</p>
                       </div>
                     </div>
-                    <div className="card-grid">
-                      {currentModule.collectibles.map((item) => {
-                        const active = gameState.collected[currentModule.id]?.includes(item.id)
-                        return (
-                          <button
-                            key={item.id}
-                            className={`collect-card ${active ? 'collect-card--active' : ''}`}
-                            onClick={() => handleCollectCard(currentModule.id, item)}
-                          >
-                            <strong>{item.label}</strong>
-                            <span>{item.type}</span>
-                            <small>+{item.rewardCoins} 金币</small>
-                          </button>
-                        )
-                      })}
-                    </div>
+                    <MemoryForge
+                      key={currentModule.id}
+                      module={currentModule}
+                      matchedIds={gameState.collected[currentModule.id] || []}
+                      onMatch={(item) => handleCollectCard(currentModule.id, item)}
+                    />
                   </div>
 
                   <div className="quest-card">
@@ -726,7 +797,15 @@ function App() {
                       <p>答对问题即可击败本关 Boss；答错会消耗能量。</p>
                     </div>
                   </div>
-                  <QuizBattle key={currentModule.id} module={currentModule} state={gameState.quiz[currentModule.id]} onSubmit={handleSubmitQuiz} />
+                  <QuizBattle
+                    key={currentModule.id}
+                    module={currentModule}
+                    state={gameState.quiz[currentModule.id]}
+                    hearts={gameState.hearts}
+                    gems={gameState.gems}
+                    onSubmit={handleSubmitQuiz}
+                    onUseHint={handleUseBattleHint}
+                  />
                 </section>
 
                 <StageNotebook
@@ -785,6 +864,10 @@ function App() {
                 <span className="eyebrow">当前关卡诊断</span>
                 <h3>{currentProgress?.ready ? '已满足通关条件' : '还未完成全部任务'}</h3>
                 <p>{currentModule?.boss?.intro}</p>
+                <div className="tag-row">
+                  <span className="tag">卡牌 {Math.min((gameState.collected[currentModule.id] || []).length, currentCollectibles.length)}/{currentCollectibles.length}</span>
+                  <span className="tag">Boss {currentBattle?.bossHpRemaining ?? currentBossRounds.length}/{currentBossRounds.length}</span>
+                </div>
                 <ul>
                   {currentModule?.keyPoints?.map((item) => <li key={item}>{item}</li>)}
                 </ul>
@@ -835,6 +918,84 @@ function EmptyState({ icon, title, description, compact = false }) {
   )
 }
 
+function MemoryForge({ module, matchedIds, onMatch }) {
+  const collectibles = useMemo(() => getCollectibles(module), [module])
+  const deck = useMemo(() => buildMemoryDeck(module), [module])
+  const [openCards, setOpenCards] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [turns, setTurns] = useState(0)
+  const [message, setMessage] = useState('先翻开两张卡，找到概念与线索之间的对应关系。')
+
+  function handleFlip(card) {
+    if (busy || openCards.includes(card.id) || matchedIds.includes(card.pairId)) {
+      return
+    }
+
+    const nextOpen = [...openCards, card.id]
+    setOpenCards(nextOpen)
+    if (nextOpen.length < 2) {
+      return
+    }
+
+    const first = deck.find((item) => item.id === nextOpen[0])
+    const second = deck.find((item) => item.id === nextOpen[1])
+    setBusy(true)
+    setTurns((prev) => prev + 1)
+
+    window.setTimeout(() => {
+      if (first?.pairId === second?.pairId) {
+        const matched = collectibles.find((item) => item.id === first?.pairId)
+        if (matched) {
+          onMatch(matched)
+          setMessage(`配对成功：已收集 ${matched.label}。`)
+        }
+      } else {
+        setMessage('这两张卡不匹配，再试一次。')
+      }
+      setOpenCards([])
+      setBusy(false)
+    }, first?.pairId === second?.pairId ? 360 : 760)
+  }
+
+  return (
+    <div className="memory-forge">
+      <div className="memory-board">
+        {deck.map((card) => {
+          const isMatched = matchedIds.includes(card.pairId)
+          const isOpen = isMatched || openCards.includes(card.id)
+          return (
+            <button
+              key={card.id}
+              className={`memory-card ${isOpen ? 'memory-card--open' : 'memory-card--back'} ${isMatched ? 'memory-card--matched' : ''}`}
+              onClick={() => handleFlip(card)}
+              disabled={busy || isMatched}
+            >
+              {isOpen ? (
+                <>
+                  <span className="memory-card__badge">{card.kind === 'label' ? '概念卡' : '线索卡'}</span>
+                  <strong>{card.title}</strong>
+                  <small>{card.detail}</small>
+                </>
+              ) : (
+                <>
+                  <span className="memory-card__icon">?</span>
+                  <strong>点击翻开</strong>
+                  <small>找出配对关系</small>
+                </>
+              )}
+            </button>
+          )
+        })}
+      </div>
+      <div className="memory-status">
+        <span>已匹配 {matchedIds.length}/{collectibles.length}</span>
+        <span>回合数 {turns}</span>
+      </div>
+      <p className="muted">{message}</p>
+    </div>
+  )
+}
+
 function ProgressPill({ label, done }) {
   return <span className={`progress-pill ${done ? 'progress-pill--done' : ''}`}>{label}</span>
 }
@@ -851,33 +1012,90 @@ function ResourceRow({ icon, label, value }) {
   )
 }
 
-function QuizBattle({ module, state, onSubmit }) {
-  const [selectedIndex, setSelectedIndex] = useState(state?.selectedIndex ?? -1)
+function QuizBattle({ module, state, hearts, gems, onSubmit, onUseHint }) {
+  const battle = getBattleState(module, state)
+  const rounds = getBossRounds(module)
+  const [selectedIndex, setSelectedIndex] = useState(-1)
+
+  const roundIndex = Math.min(battle.currentRound, Math.max(0, rounds.length - 1))
+  const currentRound = rounds[roundIndex]
+  const mistakesThisRound = battle.history.filter((item) => item.roundIndex === roundIndex && !item.correct).length
+  const hintVisible = battle.revealedHints.includes(roundIndex) || mistakesThisRound >= 2
+  const lastAttack = battle.history[battle.history.length - 1]
+  const lastRound = lastAttack ? rounds[lastAttack.roundIndex] || currentRound : currentRound
+
+  function handleAttack() {
+    onSubmit(module, selectedIndex)
+    setSelectedIndex(-1)
+  }
 
   return (
-    <div className="quiz-battle">
-      <h4>{module.quiz.question}</h4>
-      <div className="choice-grid">
-        {module.quiz.options.map((option, index) => (
-          <label key={option} className={`choice-card ${state?.selectedIndex === index ? 'choice-card--selected' : ''}`}>
-            <input
-              type="radio"
-              name={`quiz-${module.id}`}
-              checked={selectedIndex === index}
-              onChange={() => setSelectedIndex(index)}
-            />
-            <strong>{option}</strong>
-          </label>
-        ))}
+    <div className="boss-arena">
+      <div className="arena-bars">
+        <div className="meter-card">
+          <span>Boss 耐久</span>
+          <div className="meter-orbs">
+            {rounds.map((_, index) => (
+              <span key={`boss-${index}`} className={`hp-orb ${index < battle.bossHpRemaining ? 'hp-orb--filled' : ''}`}></span>
+            ))}
+          </div>
+        </div>
+        <div className="meter-card">
+          <span>你的能量</span>
+          <div className="meter-orbs">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <span key={`heart-${index}`} className={`hp-orb hp-orb--heart ${index < hearts ? 'hp-orb--filled' : ''}`}></span>
+            ))}
+          </div>
+        </div>
       </div>
-      <div className="button-row button-row--spread">
-        <button className="button button--secondary" onClick={() => onSubmit(module, selectedIndex)} disabled={selectedIndex < 0}>发起攻击</button>
-        {state && (
-          <p className={state.correct ? 'result-text result-text--success' : 'result-text result-text--error'}>
-            {state.correct ? 'Boss 已被击败。' : `这次攻击未命中，已消耗 1 点能量。`} {module.quiz.rationale}
-          </p>
-        )}
-      </div>
+
+      {battle.correct ? (
+        <div className="battle-log battle-log--success">
+          <strong>Boss 已被击败。</strong>
+          <span>{module.quiz.stretchTask}</span>
+        </div>
+      ) : (
+        <>
+          <div className="arena-phase">
+            <span>第 {roundIndex + 1} / {rounds.length} 回合</span>
+            <h4>{currentRound.question}</h4>
+            <p>{currentRound.flavor}</p>
+          </div>
+
+          <div className="choice-grid">
+            {currentRound.options.map((option, index) => (
+              <label key={`${module.id}-${roundIndex}-${option}`} className={`choice-card ${selectedIndex === index ? 'choice-card--selected' : ''}`}>
+                <input
+                  type="radio"
+                  name={`quiz-${module.id}-${roundIndex}`}
+                  checked={selectedIndex === index}
+                  onChange={() => setSelectedIndex(index)}
+                />
+                <span>攻击选项 {index + 1}</span>
+                <strong>{option}</strong>
+              </label>
+            ))}
+          </div>
+
+          <div className="arena-actions">
+            <button className="button button--secondary" onClick={() => onUseHint(module)} disabled={gems < 1 || hintVisible}>消耗 1 宝石开启提示</button>
+            <button className="button" onClick={handleAttack} disabled={selectedIndex < 0 || hearts <= 0}>发起攻击</button>
+          </div>
+
+          {hintVisible && <div className="battle-tip">战术提示：{currentRound.hint}</div>}
+
+          {lastAttack && (
+            <div className={`battle-log ${lastAttack.correct ? 'battle-log--success' : 'battle-log--error'}`}>
+              <strong>{lastAttack.correct ? '攻击命中。' : '攻击偏离。'}</strong>
+              <span>{lastRound.rationale}</span>
+            </div>
+          )}
+
+          <p className="muted">当前可用宝石：{gems}。连续两次答错后，也会自动解锁提示。</p>
+          {hearts <= 0 && <p className="result-text result-text--error">能量已见底，请先去右侧补充能量。</p>}
+        </>
+      )}
     </div>
   )
 }
@@ -964,15 +1182,207 @@ function createGameState(course) {
   }
 }
 
+function getCollectibles(module) {
+  const seeds = Array.isArray(module?.collectibles) && module.collectibles.length > 0
+    ? module.collectibles
+    : buildFallbackCollectibles(module)
+
+  return seeds.map((item, index) => ({
+    id: item.id || `${module?.id || 'module'}-collectible-${index + 1}`,
+    label: item.label || `知识碎片 ${index + 1}`,
+    type: item.type || (index === 0 ? '知识卡' : index === 1 ? '情境卡' : '策略卡'),
+    rewardCoins: Number(item.rewardCoins) || 6 + index * 2,
+    clue: item.clue || buildCollectibleClue(module, item, index),
+  }))
+}
+
+function buildFallbackCollectibles(module) {
+  const seeds = [...(module?.keywords || []), ...(module?.keyPoints || []).map((item) => String(item).replace(/^抓住关键词：/, ''))]
+    .filter(Boolean)
+  const base = [...new Set(seeds)].slice(0, 3)
+
+  return (base.length > 0 ? base : ['核心概念', '真实情境', '行动策略']).map((label, index) => ({
+    id: `${module?.id || 'module'}-fallback-${index + 1}`,
+    label,
+    type: index === 0 ? '知识卡' : index === 1 ? '情境卡' : '策略卡',
+    rewardCoins: 6 + index * 2,
+  }))
+}
+
+function buildCollectibleClue(module, item, index) {
+  const fallback = module?.keyPoints?.[index] || module?.summary || '这是本关的一条核心线索。'
+  if (item.type === '情境卡') {
+    return `把它放进场景：${shortenLabel(module?.scene || fallback, 34)}`
+  }
+  if (item.type === '策略卡') {
+    return `把它变成步骤：${shortenLabel(module?.socialWorkFocus?.bridgePrompt || fallback, 34)}`
+  }
+  return `回到核心定义：${shortenLabel(fallback, 34)}`
+}
+
+function buildMemoryDeck(module) {
+  const cards = getCollectibles(module).flatMap((item) => [
+    {
+      id: `${item.id}-label`,
+      pairId: item.id,
+      kind: 'label',
+      title: item.label,
+      detail: item.type,
+    },
+    {
+      id: `${item.id}-clue`,
+      pairId: item.id,
+      kind: 'clue',
+      title: item.clue,
+      detail: `配对成功可获得 +${item.rewardCoins} 金币`,
+    },
+  ])
+
+  return shuffleBySeed(cards, `${module?.id || module?.title || 'memory'}-deck`)
+}
+
+function getBossRounds(module) {
+  const totalRounds = clampNumber(Number(module?.boss?.hp) || 3, 2, 4)
+  const existing = Array.isArray(module?.bossBattle?.rounds)
+    ? module.bossBattle.rounds.filter((item) => item?.question)
+    : []
+
+  const normalizedExisting = existing.map((item, index) => normalizeBossRound(item, module, index))
+  if (normalizedExisting.length >= totalRounds) {
+    return normalizedExisting.slice(0, totalRounds)
+  }
+
+  const fallback = buildFallbackBossRounds(module)
+  return [...normalizedExisting, ...fallback].slice(0, totalRounds)
+}
+
+function normalizeBossRound(round, module, index) {
+  const options = ensureRoundOptions(Array.isArray(round?.options) ? round.options : [])
+  const correctIndex = clampNumber(Number.isInteger(round?.correctIndex) ? round.correctIndex : 0, 0, Math.max(0, options.length - 1))
+
+  return {
+    question: round?.question || `第 ${index + 1} 回合：围绕“${module?.title || '当前关卡'}”作答。`,
+    options,
+    correctIndex,
+    rationale: round?.rationale || module?.quiz?.rationale || '正确答案需要同时抓住概念、情境与行动。',
+    hint: round?.hint || `先抓住关键词：${(module?.keywords || []).slice(0, 2).join('、') || module?.title || '本关主线'}`,
+    flavor: round?.flavor || `Boss 正在追问你是否真正理解了“${module?.title || '本关主题'}”。`,
+  }
+}
+
+function buildFallbackBossRounds(module) {
+  const keywordA = module?.keywords?.[0] || module?.keyPoints?.[0] || '核心概念'
+  const keywordB = module?.keywords?.[1] || module?.keyPoints?.[1] || '真实情境'
+  const keywordC = module?.keywords?.[2] || module?.keyPoints?.[2] || '行动策略'
+  const lens = module?.socialWorkFocus?.theory || '课程视角'
+  const recallAnswer = module?.quiz?.options?.[module?.quiz?.correctIndex] || shortenLabel(module?.summary || module?.title || '抓住本关主线', 42)
+
+  return [
+    createBossRound({
+      question: module?.quiz?.question || `关于“${module?.title || '当前关卡'}”，哪一项最符合本关核心内容？`,
+      correct: recallAnswer,
+      distractors: [
+        `只背诵 ${keywordA} 术语，不考虑真实情境。`,
+        `把重点转移到 ${keywordB} 之外的无关主题。`,
+        '认为只要完成打卡，不需要解释与应用。',
+      ],
+      rationale: module?.quiz?.rationale || '正确答案应体现本关真正的知识主线。',
+      hint: `先回到本关摘要：${shortenLabel(module?.summary || keywordA, 40)}`,
+      flavor: '第一回合考查你是否抓住了关卡主线。',
+      seed: `${module?.id || module?.title}-boss-1`,
+    }),
+    createBossRound({
+      question: `若把“${module?.title || '当前关卡'}”带入真实情境，哪种做法更合理？`,
+      correct: `先判断对象与场景，再结合 ${keywordA} 和 ${keywordB} 设计行动。`,
+      distractors: [
+        `只重复 ${keywordA} 的定义，不分析对象处境。`,
+        '把问题完全交给别人处理，自己不做判断。',
+        '只追求立刻完成，不说明行动理由。',
+      ],
+      rationale: '真正的应用要把知识点带入具体对象和场景中。',
+      hint: `思考“谁在场、发生了什么、为什么要这样做”。`,
+      flavor: '第二回合考查情境判断。',
+      seed: `${module?.id || module?.title}-boss-2`,
+    }),
+    createBossRound({
+      question: `以下哪项最能体现 ${lens} 下的学习应用？`,
+      correct: `把 ${keywordA}、${keywordB} 与学习者已有资源连接起来，再推进 ${keywordC}。`,
+      distractors: [
+        '只强调学生不足，不看到已有资源。',
+        '只下结论，不解释支持系统和行动步骤。',
+        `把 ${keywordC} 当作孤立概念处理，忽略关系与支持。`,
+      ],
+      rationale: `这道题要看你是否能把 ${lens} 的价值逻辑真正落到学习行动中。`,
+      hint: `想一想：这个理论透镜最重视“资源、情境、支持、行动”中的哪几项？`,
+      flavor: '第三回合考查理论透镜是否真正被用起来。',
+      seed: `${module?.id || module?.title}-boss-3`,
+    }),
+    createBossRound({
+      question: '面对 Boss 的最终追问，哪种回答最完整？',
+      correct: `说明核心概念、对象情境、支持资源与下一步行动，形成闭环方案。`,
+      distractors: [
+        '只说一个定义，不解释适用边界。',
+        '只给口号，不提出可执行步骤。',
+        '只描述困难，不说明可动员的资源与支持。',
+      ],
+      rationale: '通关答案要同时讲清概念、情境、资源和行动。',
+      hint: `把回答组织成“概念—情境—资源—行动”四步。`,
+      flavor: '最终回合要求你把整关知识整合起来。',
+      seed: `${module?.id || module?.title}-boss-4`,
+    }),
+  ]
+}
+
+function createBossRound({ question, correct, distractors, rationale, hint, flavor, seed }) {
+  const options = shuffleBySeed([correct, ...distractors].slice(0, 4), seed)
+  return {
+    question,
+    options,
+    correctIndex: options.indexOf(correct),
+    rationale,
+    hint,
+    flavor,
+  }
+}
+
+function ensureRoundOptions(options) {
+  const cleaned = options.map((item) => String(item || '').trim()).filter(Boolean)
+  const fallback = ['保持概念、情境、行动的一致性。', '只做表面记忆。', '忽略对象与处境。', '只追求完成进度。']
+  return [...cleaned, ...fallback].slice(0, 4)
+}
+
+function getBattleState(module, rawState) {
+  const rounds = getBossRounds(module)
+  const totalRounds = Math.max(1, rounds.length)
+  const legacyVictory = Boolean(rawState?.correct && rawState?.bossHpRemaining === undefined && !Array.isArray(rawState?.history))
+  const currentRound = clampNumber(Number(rawState?.currentRound) || 0, 0, totalRounds - 1)
+  const derivedBossHp = legacyVictory
+    ? 0
+    : Number.isFinite(rawState?.bossHpRemaining)
+      ? rawState.bossHpRemaining
+      : Math.max(0, totalRounds - currentRound)
+  const correct = legacyVictory || Boolean(rawState?.correct || rawState?.victory || derivedBossHp === 0)
+
+  return {
+    currentRound,
+    attempts: Number(rawState?.attempts) || 0,
+    bossHpRemaining: correct ? 0 : clampNumber(derivedBossHp, 0, totalRounds),
+    correct,
+    history: Array.isArray(rawState?.history) ? rawState.history : [],
+    revealedHints: Array.isArray(rawState?.revealedHints) ? rawState.revealedHints.filter((item) => Number.isInteger(item)) : [],
+    lastSelectedIndex: Number.isInteger(rawState?.lastSelectedIndex) ? rawState.lastSelectedIndex : -1,
+  }
+}
+
 function getModuleProgress(module, gameState) {
   const collectedIds = gameState?.collected?.[module.id] || []
   const decision = gameState?.decisions?.[module.id]
-  const quiz = gameState?.quiz?.[module.id]
+  const battle = getBattleState(module, gameState?.quiz?.[module.id])
   const note = gameState?.notes?.[module.id] || ''
 
-  const collectDone = collectedIds.length >= module.collectibles.length
+  const collectDone = collectedIds.length >= getCollectibles(module).length
   const scenarioDone = Number.isInteger(decision?.optionIndex)
-  const quizDone = Boolean(quiz?.correct)
+  const quizDone = Boolean(battle.correct)
   const noteDone = note.trim().length >= 20
 
   return {
@@ -991,8 +1401,41 @@ function flattenCollectedCards(course, gameState) {
 
   return course.modules.flatMap((module) => {
     const ids = gameState.collected[module.id] || []
-    return module.collectibles.filter((item) => ids.includes(item.id))
+    return getCollectibles(module).filter((item) => ids.includes(item.id))
   })
+}
+
+function shortenLabel(value, maxLength = 40) {
+  const text = String(value || '').trim()
+  if (text.length <= maxLength) {
+    return text
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 1))}…`
+}
+
+function shuffleBySeed(items, seed) {
+  const list = [...items]
+  let state = hashSeed(seed)
+  for (let index = list.length - 1; index > 0; index -= 1) {
+    state = (state * 1664525 + 1013904223) % 4294967296
+    const nextIndex = state % (index + 1)
+    ;[list[index], list[nextIndex]] = [list[nextIndex], list[index]]
+  }
+  return list
+}
+
+function hashSeed(text) {
+  const source = String(text || 'seed')
+  let hash = 0
+  for (let index = 0; index < source.length; index += 1) {
+    hash = (hash << 5) - hash + source.charCodeAt(index)
+    hash |= 0
+  }
+  return Math.abs(hash) || 1
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value))
 }
 
 function slugifyFileName(value) {
