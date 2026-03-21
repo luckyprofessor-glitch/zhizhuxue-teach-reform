@@ -60,15 +60,16 @@ const DEFAULT_FORM = {
 function App() {
   const sharedImport = useMemo(() => {
     try {
-      return { course: loadSharedCourseFromLocation(), error: '' }
+      const sharedCourse = hydrateCourse(loadSharedCourseFromLocation())
+      return { course: sharedCourse, error: '' }
     } catch (shareError) {
       return { course: null, error: shareError.message || '分享链接解析失败。' }
     }
   }, [])
 
-  const initialCourse = sharedImport.course || loadStoredJson(STORAGE_KEYS.course, null)
+  const initialCourse = sharedImport.course || hydrateCourse(loadStoredJson(STORAGE_KEYS.course, null))
   const initialAiConfig = loadStoredJson(STORAGE_KEYS.aiConfig, DEFAULT_AI_CONFIG)
-  const initialGameState = loadStoredJson(STORAGE_KEYS.session, null)
+  const initialGameState = hydrateGameState(initialCourse, loadStoredJson(STORAGE_KEYS.session, null))
 
   const [builderForm, setBuilderForm] = useState({
     ...DEFAULT_FORM,
@@ -274,7 +275,7 @@ function App() {
     try {
       const raw = await file.text()
       const payload = JSON.parse(raw)
-      const nextCourse = payload?.course
+      const nextCourse = hydrateCourse(payload?.course)
       if (!nextCourse?.modules || !Array.isArray(nextCourse.modules)) {
         throw new Error('课程包格式无效，未找到可读取的课程结构。')
       }
@@ -1161,6 +1162,192 @@ function FinalTemple({ finalBoss, savedText, completed, onSubmit }) {
       </div>
     </section>
   )
+}
+
+function hydrateCourse(rawCourse) {
+  if (!rawCourse || !Array.isArray(rawCourse.modules) || rawCourse.modules.length === 0) {
+    return null
+  }
+
+  const modules = rawCourse.modules
+    .map((module, index) => hydrateModule(module, index))
+    .filter(Boolean)
+
+  if (modules.length === 0) {
+    return null
+  }
+
+  return {
+    ...rawCourse,
+    title: rawCourse.title || '游戏化自学课程',
+    description: rawCourse.description || '课件已转为可直接进入的游戏化自学页面。',
+    keywords: Array.isArray(rawCourse.keywords) ? rawCourse.keywords.filter(Boolean) : [],
+    modules,
+    worldMap: Array.isArray(rawCourse.worldMap) && rawCourse.worldMap.length > 0
+      ? rawCourse.worldMap.map((node, index) => ({
+          id: node?.id || modules[index]?.id || `module-${index + 1}`,
+          label: node?.label || modules[index]?.sourceLabel || `第 ${index + 1} 关`,
+          title: node?.title || modules[index]?.title || `第 ${index + 1} 关`,
+          badge: node?.badge || modules[index]?.badge || `关卡 ${index + 1}`,
+          difficulty: node?.difficulty || modules[index]?.difficulty || '基础',
+        }))
+      : modules.map((module, index) => ({
+          id: module.id,
+          label: module.sourceLabel || `第 ${index + 1} 关`,
+          title: module.title,
+          badge: module.badge,
+          difficulty: module.difficulty,
+        })),
+    gameMeta: {
+      worldName: rawCourse?.gameMeta?.worldName || `${rawCourse.title || '游戏化课程'} · 自学地图`,
+      heroTitle: rawCourse?.gameMeta?.heroTitle || '学习探索者',
+      startNarrative: rawCourse?.gameMeta?.startNarrative || `你的任务是穿越 ${modules.length} 个知识关卡，完成翻牌侦察、情境抉择与 Boss 战。`,
+    },
+    finalBoss: {
+      title: rawCourse?.finalBoss?.title || '终局任务｜把整门课带回真实世界',
+      bossName: rawCourse?.finalBoss?.bossName || '知识终幕之门',
+      prompt: rawCourse?.finalBoss?.prompt || '请结合整门课的核心概念，写出一个可落地的小方案。',
+      rubric: Array.isArray(rawCourse?.finalBoss?.rubric) && rawCourse.finalBoss.rubric.length > 0
+        ? rawCourse.finalBoss.rubric
+        : ['是否点明核心概念', '是否体现真实情境', '是否提出具体行动步骤'],
+    },
+  }
+}
+
+function hydrateModule(rawModule, index) {
+  if (!rawModule) {
+    return null
+  }
+
+  const title = rawModule.title || `第 ${index + 1} 关`
+  const summary = rawModule.summary || shortenLabel(rawModule.content || title, 100)
+  const keyPoints = Array.isArray(rawModule.keyPoints) && rawModule.keyPoints.length > 0
+    ? rawModule.keyPoints.filter(Boolean)
+    : [summary]
+  const keywords = Array.isArray(rawModule.keywords) ? rawModule.keywords.filter(Boolean) : []
+  const quiz = hydrateQuiz(rawModule, title, summary, keywords)
+  const bossRounds = getBossRounds({ ...rawModule, title, summary, keyPoints, keywords, quiz })
+  const bossHp = Math.max(1, bossRounds.length)
+
+  return {
+    ...rawModule,
+    id: rawModule.id || `module-${index + 1}`,
+    order: Number(rawModule.order) || index + 1,
+    title,
+    summary,
+    content: rawModule.content || summary,
+    keyPoints,
+    keywords,
+    difficulty: rawModule.difficulty || '基础',
+    badge: rawModule.badge || `关卡徽章 ${index + 1}`,
+    xp: Number(rawModule.xp) || 80,
+    realmName: rawModule.realmName || `${title}任务区`,
+    sourceLabel: rawModule.sourceLabel || `第 ${index + 1} 关`,
+    scene: rawModule.scene || `请把“${title}”带回一个真实课堂、社区或服务场景中理解。`,
+    challenge: rawModule.challenge || `围绕“${title}”完成本关挑战。`,
+    collectibles: getCollectibles({ ...rawModule, title, summary, keyPoints, keywords }),
+    scenario: hydrateScenario(rawModule, title, keywords),
+    boss: {
+      name: rawModule?.boss?.name || '知识守门者',
+      intro: rawModule?.boss?.intro || `击败 Boss，证明你真正理解了“${title}”。`,
+      hp: Number(rawModule?.boss?.hp) || bossHp,
+    },
+    bossBattle: {
+      rounds: bossRounds,
+    },
+    rewards: {
+      coins: Number(rawModule?.rewards?.coins) || 30 + index * 5,
+      gems: Number(rawModule?.rewards?.gems) || (index % 2 === 0 ? 1 : 2),
+    },
+    socialWorkFocus: {
+      ...(rawModule.socialWorkFocus || {}),
+      theory: rawModule?.socialWorkFocus?.theory || '课程视角',
+    },
+    quiz,
+    bossPrompt: rawModule.bossPrompt || `请用自己的话说明：在具体情境中，你会如何运用“${title}”？`,
+  }
+}
+
+function hydrateQuiz(rawModule, title, summary, keywords) {
+  const fallbackOptions = [
+    `正确理解“${title}”，并把它带入真实情境。`,
+    `只背诵“${keywords[0] || title}”的定义即可。`,
+    '只求完成打卡，不需要解释和应用。',
+    '把本关主题与无关内容混在一起。',
+  ]
+  const options = Array.isArray(rawModule?.quiz?.options) && rawModule.quiz.options.length > 0
+    ? ensureRoundOptions(rawModule.quiz.options)
+    : fallbackOptions
+  const correctIndex = Number.isInteger(rawModule?.quiz?.correctIndex)
+    ? clampNumber(rawModule.quiz.correctIndex, 0, Math.max(0, options.length - 1))
+    : 0
+
+  return {
+    question: rawModule?.quiz?.question || `关于“${title}”，哪一项最符合本关核心内容？`,
+    options,
+    correctIndex,
+    rationale: rawModule?.quiz?.rationale || `正确答案应体现“${title}”的核心知识与真实应用。`,
+    stretchTask: rawModule?.quiz?.stretchTask || `请围绕“${keywords[0] || title}”再举一个真实应用例子。`,
+    summary,
+  }
+}
+
+function hydrateScenario(rawModule, title, keywords) {
+  const scenario = rawModule?.scenario
+  if (scenario && Array.isArray(scenario.options) && scenario.options.length >= 2) {
+    return {
+      ...scenario,
+      bestIndex: Number.isInteger(scenario.bestIndex) ? scenario.bestIndex : 0,
+      rationale: scenario.rationale || '更优策略应同时考虑知识点、情境与行动步骤。',
+    }
+  }
+
+  const anchor = keywords[0] || title
+  const support = keywords[1] || '情境因素'
+  return {
+    prompt: `面对与“${title}”相关的问题时，哪种行动更符合本关目标？`,
+    options: [
+      `只背诵 ${anchor} 的定义，不考虑对象情境。`,
+      `先识别对象与处境，再结合 ${anchor} 和 ${support} 设计行动。`,
+      '把问题交给别人处理，自己不做判断。',
+    ],
+    bestIndex: 1,
+    rationale: '更优策略应把知识点真正放入具体情境中。',
+  }
+}
+
+function hydrateGameState(course, rawState) {
+  if (!course) {
+    return null
+  }
+
+  const base = createGameState(course)
+  if (!rawState || rawState.courseId !== course.id) {
+    return base
+  }
+
+  const validModuleIds = new Set(course.modules.map((module) => module.id))
+
+  return {
+    ...base,
+    ...rawState,
+    courseId: course.id,
+    currentStage: clampNumber(Number(rawState.currentStage) || 0, 0, Math.max(0, course.modules.length - 1)),
+    xp: Number(rawState.xp) || 0,
+    coins: Number(rawState.coins) || base.coins,
+    gems: Number(rawState.gems) || 0,
+    hearts: clampNumber(Number(rawState.hearts) || base.hearts, 0, 5),
+    collected: rawState.collected && typeof rawState.collected === 'object' ? rawState.collected : {},
+    decisions: rawState.decisions && typeof rawState.decisions === 'object' ? rawState.decisions : {},
+    quiz: rawState.quiz && typeof rawState.quiz === 'object' ? rawState.quiz : {},
+    notes: rawState.notes && typeof rawState.notes === 'object' ? rawState.notes : {},
+    clearedStages: Array.isArray(rawState.clearedStages)
+      ? rawState.clearedStages.filter((item) => validModuleIds.has(item))
+      : [],
+    badges: Array.isArray(rawState.badges) ? rawState.badges.filter(Boolean) : [],
+    finalPlan: String(rawState.finalPlan || ''),
+    finalBossDone: Boolean(rawState.finalBossDone),
+  }
 }
 
 function createGameState(course) {
